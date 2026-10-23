@@ -1,2 +1,1 @@
-def main() -> None:
-    print("Hello from termostat!")
+"""Automatic temperature control for a heat pump via Sensibo. See DESIGN.md."""

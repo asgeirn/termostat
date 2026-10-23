@@ -1,7 +1,7 @@
 [project]
 name = "termostat"
 version = "0.1.0"
-description = "Add your description here"
+description = "Automatic temperature control for a heat pump via Sensibo"
 readme = "README.md"
 authors = [
     { name = "Asgeir Nilsen", email = "asgeir@twingine.no" }
@@ -10,7 +10,10 @@ requires-python = ">=3.15"
 dependencies = []
 
 [project.scripts]
-termostat = "termostat:main"
+termostat-backfill = "termostat.backfill:main"
+termostat-configure = "termostat.configure:main"
+termostat-log = "termostat.logger:main"
+termostat-report = "termostat.report:main"
 
 [build-system]
 requires = ["uv_build>=0.13.5,<0.14.0"]

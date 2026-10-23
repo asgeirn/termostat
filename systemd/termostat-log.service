@@ -1,0 +1,13 @@
+[Unit]
+Description=Termostat: log indoor measurements, AC state and weather forecast
+Documentation=file://@SRC@/README.md
+
+[Service]
+Type=oneshot
+EnvironmentFile=@ENV_FILE@
+Environment=PYTHONPATH=@SRC@/src
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=@PYTHON@ -m termostat.logger
+TimeoutStartSec=2min
+Nice=10
+NoNewPrivileges=yes
