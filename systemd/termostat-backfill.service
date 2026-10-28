@@ -1,0 +1,13 @@
+[Unit]
+Description=Termostat: backfill Sensibo's 90 second indoor measurements
+Documentation=file://@SRC@/README.md
+
+[Service]
+Type=oneshot
+EnvironmentFile=@ENV_FILE@
+Environment=PYTHONPATH=@SRC@/src
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=@PYTHON@ -m termostat.backfill --days 1
+TimeoutStartSec=5min
+Nice=10
+NoNewPrivileges=yes

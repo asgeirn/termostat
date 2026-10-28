@@ -2,7 +2,8 @@
 Description=Termostat: log every 5 minutes
 
 [Timer]
-OnCalendar=*:0/5
+# UTC, so the timer does not skip the repeated hour when daylight saving time ends.
+OnCalendar=*-*-* *:0/5:00 UTC
 # Spread requests a little; MET Norway asks clients to avoid traffic spikes on the hour.
 RandomizedDelaySec=30s
 AccuracySec=10s

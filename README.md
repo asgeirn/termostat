@@ -19,9 +19,9 @@ systemd/install.sh                 # rerun to enable the timers
 
 The installer:
 
-- installs `termostat-log.{service,timer}` (every 5 minutes) in `~/.config/systemd/user`,
+- installs `termostat-log.{service,timer}` (every 5 minutes) and `termostat-backfill.{service,timer}` (every 6 hours) in `~/.config/systemd/user`,
 - installs `termostat-configure`, `termostat-log`, `termostat-backfill` and `termostat-report` wrappers in `~/.local/bin` (add it to `PATH`, or set `BIN_DIR`); they load `~/.config/termostat/env` automatically,
-- once the environment file exists, backfills the last 24 hours of Sensibo measurements and enables the timer.
+- once the environment file exists, backfills the last 24 hours of Sensibo measurements and enables the timers.
 
 User timers only run while you are logged in unless lingering is enabled. On NixOS:
 
@@ -60,7 +60,7 @@ The file uses `KEY=value` lines, which work both as a systemd `EnvironmentFile` 
 termostat-log
 ```
 
-Run by `termostat-log.timer` every 5 minutes. Each run stores one row in `readings` (indoor measurements, AC state including fan level, and outdoor conditions interpolated from the current forecast), new entries from the Sensibo AC state history in `ac_state_changes`, and a new forecast in `forecasts`/`forecast_steps` when the cached one has expired. The exit code is non-zero if any part failed, so the failure shows up in `systemctl --user status termostat-log`.
+Run by `termostat-log.timer` every 5 minutes (scheduled in UTC, so the timer does not skip the repeated hour when daylight saving time ends). Each run stores one row in `readings` (indoor measurements, AC state including fan level, and outdoor conditions interpolated from the current forecast), new entries from the Sensibo AC state history in `ac_state_changes`, and a new forecast in `forecasts`/`forecast_steps` when the cached one has expired. The exit code is non-zero if any part failed, so the failure shows up in `systemctl --user status termostat-log`.
 
 ## Backfill
 
@@ -68,7 +68,7 @@ Run by `termostat-log.timer` every 5 minutes. Each run stores one row in `readin
 termostat-backfill
 ```
 
-Fetches Sensibo's stored indoor measurements (the last 24 hours, which is what the account provides) into `historical_measurements`. Run automatically by the installer to cover the period before logging starts. Safe to rerun; `--days N` fetches more if your account has a longer history.
+Fetches Sensibo's stored indoor measurements (the last 24 hours, which is what the account provides) into `historical_measurements`. Sensibo measures every 90 seconds, while the logger samples every 5 minutes, so the backfill gives about 3.3 times the resolution. Run by the installer to cover the period before logging starts, and then every 6 hours by `termostat-backfill.timer`. Safe to rerun; `--days N` fetches more if your account has a longer history.
 
 Sensibo only provides temperature and humidity here; AC state history is limited to the last 20 changes (logged by `termostat-log`), and past outdoor conditions are not available from Locationforecast.
 

@@ -11,3 +11,8 @@ wheels/
 
 # Nix-built Python used by systemd/install.sh
 /.python
+
+# Local copies of the logged database
+*.db
+*.db-shm
+*.db-wal

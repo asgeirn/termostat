@@ -1,0 +1,12 @@
+[Unit]
+Description=Termostat: backfill Sensibo measurements every 6 hours
+
+[Timer]
+# Sensibo only keeps 24 hours of history. Running every 6 hours with --days 1 leaves
+# plenty of margin for a missed run. The backfill is idempotent.
+OnCalendar=*-*-* 00/6:20:00 UTC
+Persistent=true
+RandomizedDelaySec=60s
+
+[Install]
+WantedBy=timers.target

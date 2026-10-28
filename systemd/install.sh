@@ -16,8 +16,8 @@ CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
 UNIT_DIR=$CONFIG_HOME/systemd/user
 ENV_FILE=$CONFIG_HOME/termostat/env
 BIN_DIR=${BIN_DIR:-$HOME/.local/bin}
-UNITS="termostat-log.service termostat-log.timer"
-TIMERS="termostat-log.timer"
+UNITS="termostat-log.service termostat-log.timer termostat-backfill.service termostat-backfill.timer"
+TIMERS="termostat-log.timer termostat-backfill.timer"
 COMMANDS="configure log backfill report"
 
 if [ "${1:-}" = "--uninstall" ]; then
@@ -75,12 +75,15 @@ fi
 
 chmod 600 "$ENV_FILE"
 
-# Sensibo keeps 24 hours of history for this account, so a one-off backfill at install
-# time covers the period before logging starts. Safe to repeat on reinstall.
+# Sensibo keeps 24 hours of history for this account, so a backfill at install time
+# covers the period before logging starts; termostat-backfill.timer repeats it later.
+# Safe to repeat on reinstall.
 echo "Backfilling the last 24 hours of Sensibo measurements ..."
 "$BIN_DIR/termostat-backfill" --days 1 || echo "Warning: backfill failed; rerun with $BIN_DIR/termostat-backfill"
 
-systemctl --user enable --now $TIMERS
+# Restart as well, so that changed timer specs take effect on a reinstall.
+systemctl --user enable $TIMERS
+systemctl --user restart $TIMERS
 echo "Enabled timers:"
 systemctl --user list-timers $TIMERS --no-pager
 
