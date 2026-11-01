@@ -2,10 +2,12 @@
 Description=Termostat: step test runner every 5 minutes
 
 [Timer]
-# One minute after the logger, so the decision just after midnight sees a fresh reading.
-# Runs all day; outside the night window and with no test active it only reads the database.
-# The test window itself (00:00–05:30) is evaluated in local time by the program.
-OnCalendar=*-*-* *:1/5:00 UTC
+# Local time, like the test window (00:00–05:30) the program evaluates. One minute after the
+# logger, so the decision just after midnight sees a fresh reading. Runs all day; outside the
+# night window and with no test active it only reads the database. When daylight saving time
+# ends, systemd skips the repeated hour (02:00–03:00); that only pauses the safety monitoring,
+# since the restore is at 05:30.
+OnCalendar=*-*-* *:1/5:00
 AccuracySec=10s
 
 [Install]
