@@ -2,7 +2,7 @@
 
 Automatic temperature control for an air to air heat pump via a Sensibo Sky. See [DESIGN.md](DESIGN.md).
 
-Currently implements **phase 1**: logging only. Nothing is ever written to the heat pump.
+Currently implements **phase 1** (logging) and **phase 2** (autonomous overnight step tests). The step test timer is the only part that writes to the heat pump: it changes the setpoint at night and restores it before morning.
 
 ## Installation (NixOS, systemd user timer)
 
@@ -19,8 +19,8 @@ systemd/install.sh                 # rerun to enable the timers
 
 The installer:
 
-- installs `termostat-log.{service,timer}` (every 5 minutes) and `termostat-backfill.{service,timer}` (every 6 hours) in `~/.config/systemd/user`,
-- installs `termostat-configure`, `termostat-log`, `termostat-backfill` and `termostat-report` wrappers in `~/.local/bin` (add it to `PATH`, or set `BIN_DIR`); they load `~/.config/termostat/env` automatically,
+- installs `termostat-log.{service,timer}` (every 5 minutes), `termostat-backfill.{service,timer}` (every 6 hours) and `termostat-steptest.{service,timer}` (every 5 minutes) in `~/.config/systemd/user`,
+- installs `termostat-configure`, `termostat-log`, `termostat-backfill`, `termostat-report` and `termostat-steptest` wrappers in `~/.local/bin` (add it to `PATH`, or set `BIN_DIR`); they load `~/.config/termostat/env` automatically,
 - once the environment file exists, backfills the last 24 hours of Sensibo measurements and enables the timers.
 
 User timers only run while you are logged in unless lingering is enabled. On NixOS:
@@ -71,6 +71,24 @@ termostat-backfill
 Fetches Sensibo's stored indoor measurements (the last 24 hours, which is what the account provides) into `historical_measurements`. Sensibo measures every 90 seconds, while the logger samples every 5 minutes, so the backfill gives about 3.3 times the resolution. Run by the installer to cover the period before logging starts, and then every 6 hours by `termostat-backfill.timer`. Safe to rerun; `--days N` fetches more if your account has a longer history.
 
 Sensibo only provides temperature and humidity here; AC state history is limited to the last 20 changes (logged by `termostat-log`), and past outdoor conditions are not available from Locationforecast.
+
+## Step tests
+
+```sh
+termostat-steptest check      # what would be decided for the next night (writes nothing)
+termostat-steptest status     # recorded nights, decisions and fitted models
+termostat-steptest analyze 2026-11-03   # refit a test from the stored data
+```
+
+`termostat-steptest.timer` runs `termostat-steptest run` every 5 minutes. Outside the night window, with no test active, it only reads the database.
+
+- **Decision** (first run between 00:00 and 00:30 local time): one row per night in `step_tests`, with the decision, the reasons for skipping and every value it was based on (`checks`, JSON). The test runs only if all of these hold: a test kind is still wanted; the device is connected with a fresh measurement; the heat pump is on in heat mode with a fixed fan level; the step setpoint is within 16–24; at least 9 readings in the last hour, varying at most 0.4 °C; no AC state change in the last 3 hours; and the latest forecast (at most 3 hours old) covers 00:00–05:30, with outdoor temperature varying at most 3 °C and wind at most 8 m/s.
+- **Test kinds**: `heat` (setpoint +2) first, then `cool` (setpoint −2), each once. A test that ends at a safety limit also counts. Change `runs_per_kind` in `steptest.Settings` to repeat them, for example in colder weather.
+- **During the test**: if the room passes 23.0 °C (heat) or falls below 19.0 °C (cool), the setpoint is restored early (`end_reason = 'limit'`). If the AC state differs from what the test set, someone used the app: the test is aborted and their change is left in place (`override`). The IR remote cannot be detected, so don't use it at night.
+- **Restore** at 05:30 local time to the setpoint recorded at the start. Failures are retried every 5 minutes (`restore_failed` events) until it succeeds.
+- **Analysis**: after the restore, the last 24 hours of 90 s measurements are fetched and a first order plus dead time model is fitted (`result`, JSON: change from the pre-step level, gain per setpoint degree, time constant, dead time, RMSE, outdoor mean). With a 5.5 hour test and a time constant around 3 hours, the final value is an extrapolation.
+
+All writes and their API responses are in `step_test_events`, so they can be matched against `ac_state_changes` (to see which `reason` Sensibo gives our own writes). Stop the tests with `systemctl --user disable --now termostat-steptest.timer`.
 
 ## Reporting
 

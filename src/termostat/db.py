@@ -84,6 +84,42 @@ CREATE TABLE IF NOT EXISTS metno_cache (
     expires TEXT,
     last_modified TEXT
 );
+
+-- One row per night the step test timer considered (see steptest.py).
+CREATE TABLE IF NOT EXISTS step_tests (
+    id INTEGER PRIMARY KEY,
+    night TEXT NOT NULL UNIQUE,          -- local date of the midnight the test starts at
+    device_id TEXT NOT NULL,
+    decided_at TEXT NOT NULL,
+    decision TEXT NOT NULL,              -- run, skip
+    reasons TEXT,                        -- JSON list of reasons to skip
+    checks TEXT,                         -- JSON object with all values the decision was based on
+    forecast_id INTEGER REFERENCES forecasts(id),
+    kind TEXT,                           -- heat, cool
+    status TEXT NOT NULL,                -- skipped, running, restoring, completed, aborted
+    baseline_on INTEGER,
+    baseline_mode TEXT,
+    baseline_fan_level TEXT,
+    baseline_target_temperature INTEGER,
+    step_target_temperature INTEGER,
+    start_temperature REAL,
+    started_at TEXT,
+    planned_end_at TEXT,
+    ended_at TEXT,
+    end_reason TEXT,                     -- completed, limit, override, start_failed
+    restored_at TEXT,
+    result TEXT,                         -- JSON: fitted first order plus dead time model
+    analyzed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS step_test_events (
+    id INTEGER PRIMARY KEY,
+    test_id INTEGER NOT NULL REFERENCES step_tests(id),
+    at TEXT NOT NULL,
+    event TEXT NOT NULL,
+    detail TEXT                          -- JSON
+);
+CREATE INDEX IF NOT EXISTS step_test_events_test_id ON step_test_events(test_id);
 """
 
 

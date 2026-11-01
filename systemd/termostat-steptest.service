@@ -1,0 +1,12 @@
+[Unit]
+Description=Termostat: overnight step tests (decide, start, monitor, restore)
+Documentation=file://@SRC@/README.md
+
+[Service]
+Type=oneshot
+EnvironmentFile=@ENV_FILE@
+Environment=PYTHONPATH=@SRC@/src
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=@PYTHON@ -m termostat.steptest run
+TimeoutStartSec=5min
+NoNewPrivileges=yes

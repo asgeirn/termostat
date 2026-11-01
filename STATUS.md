@@ -1,18 +1,19 @@
 # Status
 
-_Last updated: 2026-10-28 (first review, 4.9 days of logging). Next review: around 2026-11-04, or after the first cold spell, whichever comes first._
+_Last updated: 2026-11-01 (second review, 8.5 days of logging; step tests written). Next review: after both step tests have run, or after the first cold spell._
 
 ## Where we are
 
-**Phase 1 (logger only) is running** on the NixOS host as a systemd user timer. Nothing is written to the heat pump.
+**Phase 1 (logger only) is running** on the NixOS host as a systemd user timer. **Phase 2 (step tests) is written** (`termostat-steptest`, not yet deployed). Once installed, it is the only part that writes to the heat pump, at night only.
 
 | Component | State |
 |---|---|
 | `termostat-log.timer` | Installed and enabled, every 5 minutes. Changed to a UTC calendar spec (see below) |
 | `termostat-backfill.timer` | New, every 6 hours |
-| Deployment | Deployed to the NixOS host at the commit time of the first review changes (`git log --before=2026-10-28T18:03Z -1`), 2026-10-28 18:02:22 UTC (19:02:22 local). Confirm with `systemctl --user list-timers` that both timers are active |
+| Deployment | Commit `71d8f3f` (2026-10-28 18:02:22 UTC) was first pushed late, so the first install attempt failed. After the push and a rerun of `systemd/install.sh`, the unit files were installed on the host at **2026-10-28 19:09:14 CET (18:09:14 UTC)** (file mtimes), and both timers were confirmed active at 19:09:47 CET |
 | Install-time backfill | Ran `termostat-backfill --days 1` (24 hours is the account's history limit) |
 | `termostat-report` | Available for reviewing history |
+| `termostat-steptest.timer` | Written 2026-11-01, **not yet deployed**. Every 5 minutes; decides just after midnight, steps the setpoint ±2, restores at 05:30 local time |
 | Controller (phase 3) | Not started |
 
 ### Verified against the real APIs (review of 2026-10-28)
@@ -31,8 +32,44 @@ Database downloaded from the host (1384 readings, 2026-10-23 21:00 – 2026-10-2
 ### Still unverified
 
 - Which `reason` the controller's own API writes will get (probably `UserRequest`). Needed to tell the controller's writes from manual changes in the history. Test during the step test.
-- Whether the `OnCalendar=... UTC` spec behaves as expected on the host (check `systemctl --user list-timers` after reinstalling). Next DST change is 2027-03-28.
+- Whether the UTC `OnCalendar` spec avoids the gap at the next DST change. The gap seen in 2026 was at the end of DST, so the real test is 2027-10-31 (the start of DST is 2027-03-28). Both specs were accepted by systemd on the host and scheduled as expected: the logger at 5-minute marks, the backfill at 18:20 UTC plus a random delay (next run 19:20:52 CET).
 - Whether the timer gap at the DST change really was the timer (see above).
+
+## Findings from the second review (2026-11-01)
+
+Database downloaded 2026-11-01 (2446 readings up to 09:55 UTC).
+
+### Logging health
+
+- 288 readings every full day since 10-26. One missed run (10 min, 11-01 03:40 UTC). No nulls; measurement age 6 / 46 / 90 s.
+- The backfill timer works: 90 s data has been continuous since 10-27 00:00, at 960 points a day.
+- 41–42 forecasts a day. Database 6.5 MB, about 260 MB a year.
+- No `ScheduledCommand` or `Tibber` rows since 10-23.
+
+### Model
+
+- **The "floor = setpoint + 1.3" hypothesis does not hold.** At 19 / medium_low (10-28 20:05 to 10-31 08:03, undisturbed) there was no flat floor: the room drifted down all night, to 20.1, 19.8 and 19.7. The offset between the Sky and the setpoint shrinks as the setpoint rises: about +1.3 at 18 / low, +0.7–1.1 at 19 / medium_low, +0.6–1.0 at 20 / medium_low, and about +0.35 at 21 / medium_low (fitted). A setpoint degree gives less than a room degree, so the controller needs integral action on the Sky and cannot use a fixed offset.
+- **The 10-31 change worked as a step test** (setpoint 19 → 21, medium_low, 100 % cloud, 6–7 °C outdoor, by the household because it was too cold). The room rose from 19.70 to 21.19 in 6.5 h. A first order fit gives **τ ≈ 3.4 h, Δ∞ ≈ +1.66 °C (gain ≈ 0.83 per setpoint degree), no measurable dead time, RMSE 0.05** (`steptest.analyze` on the 90 s data). When the setpoint went back to 20 at 14:32, the room fell 0.25 °C within 20 minutes, so the pump was actively heating.
+- **Cooking**: +0.4–0.6 °C lasting hours, always with a 3–4 point humidity rise (10-29 18:30, 10-30 16:30, 10-31 15:30 UTC). Humidity can serve as a disturbance marker.
+- **Sun**: about +0.8 °C on a clear late-October day (10-29, 20.2 → 21.0 at 12:30 UTC).
+- **Comfort**: both times the room reached 19.7–19.9, the setpoint was raised (10-27, 10-31). The minimum comfort temperature is **20.0 °C**, and the target should be as close above it as the control precision allows.
+- Still not winter: outdoor 4.2–12.7 °C over the whole period.
+
+### Step tests (phase 2)
+
+`termostat-steptest` runs the two step tests autonomously, heat (+2) first, then cool (−2), each once, from 00:00 to 05:30 local time, on nights with a stable forecast (outdoor spread ≤ 3 °C, wind ≤ 8 m/s), a settled room and no manual changes in the last 3 hours. Safety limits: restore early below 19.0 °C (cool) or above 23.0 °C (heat); app changes abort the test and are left in place. Decisions, writes, API responses and fitted models are stored in `step_tests` and `step_test_events`; see README. Run on the real data, the analysis reproduces the 10-31 fit above.
+
+Expectations at the current baseline (20 / medium_low, room about 20.8): heat test to about 22.1 by 05:30 (20.8 + 1.66 × (1 − e^(−5.5/3.4))); cool test to about 19.5 if the response is symmetric (it may not be, since the pump idles), so the room is below 20.0 at 05:30 and needs roughly 1–1.5 h to recover. If that is unacceptable, move the end time earlier (`Settings.end_time`) for the cool test.
+
+To review after the tests:
+
+```sh
+termostat-steptest status
+sqlite3 $DB "SELECT night, decision, reasons, json_extract(checks, '$.forecast') FROM step_tests"
+sqlite3 $DB "SELECT * FROM step_test_events ORDER BY id"
+-- reason Sensibo gives our own writes:
+sqlite3 $DB "SELECT changed_at, reason, target_temperature FROM ac_state_changes WHERE changed_at > '2026-11-01' ORDER BY changed_at"
+```
 
 ## Findings from the first review
 
@@ -194,6 +231,9 @@ Taken from `ac_state_changes`, all `UserRequest` (so app changes; the remote is 
 | 10-26 13:22 | off, then on 4 s later; swing `stopped` at 13:22, `rangeFull` again at 14:29 | Heat pump service (remote used). The appointment was at 13:30 UTC+1 and lasted about one hour.  |
 | 10-27 13:57–14:02 | off/on twice, setpoint 18 → 19 → 20 → 21 | Wife returned, felt the room was too cold. (Sky read 19.9 °C.) |
 | 10-27 16:16 | fan low → medium_low, setpoint 21 → 20 | I lowered the temp one degree and increased fan instead. |
+| 10-28 20:05 | setpoint 20 → 19 | (Not commented.) |
+| 10-31 08:03 | off/on, setpoint 19 → 20 → 21 | Temperature too low (Sky read 19.7 °C). |
+| 10-31 14:32 | setpoint 21 → 20 | (Not commented. Too warm?) |
 
 ### Other events (window open, wood stove, guests, away, ...)
 
@@ -209,11 +249,11 @@ Taken from `ac_state_changes`, all `UserRequest` (so app changes; the remote is 
 
 ## Decisions to make at the next review
 
-1. **Target temperature and comfort band.** What temperature do you want (is it about 21?), and what deviation is acceptable (e.g. ±0.3 °C)? Different for night?
-2. **Fan level.** Which fixed level to use for the step test and phase 3 (low or medium_low; the model is only valid for one).
+1. **Target temperature and comfort band.** Answered 2026-11-01: minimum 20.0 °C, target as close above it as possible. Still open: acceptable deviation, and whether the night may be cooler.
+2. **Fan level.** medium_low for now (the household's choice; the step tests use whatever fixed level is set at midnight and record it).
 3. **Sensor placement.** Based on reference readings: is the Sky representative, and how much of the +1.3 offset is sensor placement?
-4. **Length of phase 1.** The outdoor range so far (5–13 °C) is too warm. Continue until it includes a cold period, or proceed with a step test now and repeat it in the cold.
-5. **Step test plan (phase 2).** Pick a night with stable weather and nobody touching the heat pump: fixed fan level, setpoint +2 °C, hold 6–12 hours or until settled, then back. Also use the test to answer: does the unit idle above its floor, and does the plateau follow the setpoint one for one? Optionally a fan level step on another night. Needs a small command to set the state at a scheduled time, or can be done manually in the Sensibo app with the time noted here.
+4. **Length of phase 1.** Decided 2026-11-01: step test now, repeat in the cold (raise `runs_per_kind`).
+5. **Step test plan (phase 2).** Implemented as `termostat-steptest` (see above). Original plan: pick a night with stable weather and nobody touching the heat pump: fixed fan level, setpoint +2 °C, hold 6–12 hours or until settled, then back. Also use the test to answer: does the unit idle above its floor, and does the plateau follow the setpoint one for one? Optionally a fan level step on another night. Needs a small command to set the state at a scheduled time, or can be done manually in the Sensibo app with the time noted here.
 6. **Power metering.** This is now the most useful additional input: it would show compressor activity directly and turn the floor hypothesis into a fact (HAN port / smart plug).
 7. **Other inputs.** Local outdoor sensor, electricity prices (Tibber was in use before), forecast cloud cover as a solar gain feed-forward.
 8. **Existing automation.** Confirm the Sensibo schedule and Tibber integration are deliberately off.
@@ -236,5 +276,8 @@ Taken from `ac_state_changes`, all `UserRequest` (so app changes; the remote is 
 | 2026-10-28 | Continue phase 1 into colder weather; step test to be planned after the next review |
 | 2026-10-28 | Override detection in the design only covers app changes; IR remote use is accepted as undetectable (see DESIGN.md, robustness) |
 | 2026-10-28 | Install the backfill timer and keep logging as is for a few more days, without changing the setpoint, fan level or schedule |
-| 2026-10-28 18:02:22 UTC | Deployed the backfill timer and the UTC logger timer to the NixOS host (time of the commit) |
+| 2026-10-28 19:09:14 CET (18:09:14 UTC) | Backfill timer and UTC logger timer deployed to the NixOS host (unit file mtimes) after the push was forgotten once; confirmed with `systemctl --user list-timers` at 19:09:47 CET (18:09:47 UTC): `termostat-log.timer` next 19:10:20 CET, last 19:05:12 CET; `termostat-backfill.timer` next 19:20:52 CET, not yet run |
+| 2026-11-01 | Second review: logging healthy; floor hypothesis rejected; 10-31 accidental step gives τ ≈ 3.4 h, gain ≈ 0.83 |
+| 2026-11-01 | Comfort minimum 20.0 °C, target as close above it as possible |
+| 2026-11-01 | Step tests now rather than waiting for cold: autonomous `termostat-steptest`, heat +2 then cool −2, 00:00–05:30 local, gated on forecast and room stability, everything recorded in the database |
 | | |

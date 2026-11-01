@@ -16,9 +16,9 @@ CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
 UNIT_DIR=$CONFIG_HOME/systemd/user
 ENV_FILE=$CONFIG_HOME/termostat/env
 BIN_DIR=${BIN_DIR:-$HOME/.local/bin}
-UNITS="termostat-log.service termostat-log.timer termostat-backfill.service termostat-backfill.timer"
-TIMERS="termostat-log.timer termostat-backfill.timer"
-COMMANDS="configure log backfill report"
+UNITS="termostat-log.service termostat-log.timer termostat-backfill.service termostat-backfill.timer termostat-steptest.service termostat-steptest.timer"
+TIMERS="termostat-log.timer termostat-backfill.timer termostat-steptest.timer"
+COMMANDS="configure log backfill report steptest"
 
 if [ "${1:-}" = "--uninstall" ]; then
     systemctl --user disable --now $TIMERS 2>/dev/null || true
