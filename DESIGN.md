@@ -24,7 +24,7 @@ The heat pump is the main source of heating in the house.
 | Weather forecast | The house reacts slowly, so heating can start *before* a cold snap | met.no Locationforecast |
 | Solar radiation / cloud cover | Solar gain can noticeably heat a well insulated house | met.no, or time of day as a proxy |
 | Wind | Increases infiltration losses | met.no |
-| Heat pump power draw | Shows actual heat delivered, reveals defrost cycles and saturation | HAN port reader, smart plug, Tibber Pulse |
+| Heat pump power draw | Shows actual heat delivered, reveals defrost cycles and saturation | **Shelly Plug PM Gen3, ordered 2026-11-01** (see Power metering) |
 | Other heat sources | Wood stove, cooking, guests etc. will otherwise confuse the controller | Manual flag, or detected from sudden rises |
 | Electricity spot price | Optional: shift heating to cheap hours | Nord Pool / hvakosterstrommen.no |
 | Thermal model of the house | Gain, time constant and dead time are needed to tune the controller | Step test (see Phases) |
@@ -61,6 +61,8 @@ All configuration is through environment variables. `termostat-configure` lists 
 - `TERMOSTAT_ALTITUDE` (optional): metres above sea level, improves forecast temperature.
 - `METNO_USER_AGENT`: application name and contact information, required by MET Norway.
 - `TERMOSTAT_DB` (optional): SQLite database path.
+- `SHELLY_HOST` (optional): IP address or host name of the Shelly power meter on the heat pump's supply. Power logging is off when unset.
+- `SHELLY_PASSWORD` (optional): the plug's password, if one is set (digest authentication, user `admin`).
 
 ### Control strategy: cascade PI
 
@@ -125,6 +127,26 @@ What to store:
 
 If the forecast cannot be fetched, the logger and controller continue using the latest cached forecast while it still covers the current time, and otherwise run without outdoor data (no feedforward).
 
+### Power metering
+
+A Shelly Plug PM Gen3 was ordered on 2026-11-01. It is a metering-only plug with no relay, so it cannot cut power. The heat pump will be plugged in through it, so it measures the whole unit (compressor, fans, controls and defrost). It answers the questions the temperature data alone cannot (see STATUS.md):
+
+- Whether the compressor is running, idling or cycling, which settles the "floor" question and shows when the pump is at its capacity limit.
+- Defrost cycles in cold weather, which are disturbances the controller should not react to (and a reason to freeze the integrator).
+- The response to setpoint and fan steps measured as power, which has much less delay than the room temperature.
+- Energy use per day against outdoor temperature, to compare the controller with the manual baseline, and later for price-aware control.
+
+How it is read:
+
+- Local Gen2+ RPC API over HTTP on the LAN, no cloud: `GET http://<host>/rpc/PM1.GetStatus?id=0` gives instantaneous power (`apower`, W), voltage, current, frequency, the energy counter (`aenergy.total`, Wh) and energy per minute for the last three minutes (`aenergy.by_minute`, mWh).
+- `termostat-log` reads it on every run and stores one row in `power_readings`, including the raw response. The difference in `aenergy.total` between two runs gives the exact mean power over the 5 minutes, so short compressor cycles between samples are not lost. `by_minute` adds 1-minute resolution for 3 of every 5 minutes. If cycling turns out to be faster than that, add a separate 1-minute power timer.
+- A failed power reading is logged as a warning and counts as a failed step, like the other sources, but never stops the rest of the run.
+
+Installation:
+
+- The plug carries the heat pump's full current even though it cannot switch it, so check that its rated current covers the heat pump's maximum input and start-up current (rating plate).
+- Give the plug a fixed IP address (DHCP reservation) or a stable host name, and set a password if the network is shared.
+
 ### State and logging
 
 Cron runs are stateless, so persist controller state between runs in SQLite: integral term, last written setpoint and fan level, time of last change and override status.
@@ -139,6 +161,7 @@ Run every 5–10 minutes. The Sensibo Sky updates its measurements roughly every
 - Fail safe: if measurements are stale or the API fails, leave the setpoint unchanged. Never turn the unit off because of an error.
 - Clamp the setpoint and fan level to the ranges supported by the unit, read from the device's `remoteCapabilities` rather than hard coded. Never select `auto` fan unless explicitly configured.
 - Hard limits: if the room temperature falls below a safety threshold (e.g. 16 °C), override the controller and set a safe high setpoint.
+- Power data (once available): if the power stays at standby level for a long time while the room is below target and the setpoint is high, the unit is not heating (fault, lost IR sync, or at its limit). Raise a warning.
 
 ## Phases
 

@@ -8,6 +8,7 @@ from typing import Any
 from termostat import config
 from termostat.config import ConfigError
 from termostat.sensibo import SensiboClient, SensiboError
+from termostat.shelly import ShellyClient, ShellyError
 
 DEVICE_FIELDS = [
     "id",
@@ -63,6 +64,22 @@ def describe(device: dict[str, Any]) -> list[str]:
     return lines
 
 
+def describe_shelly(client: ShellyClient) -> list[str]:
+    try:
+        info = client.get_device_info()
+        status = client.get_meter_status()
+    except ShellyError as error:
+        return [f"Shelly power meter at {client.host}: {error}"]
+    energy = status.get("aenergy") or {}
+    return [
+        f"Shelly power meter at {client.host}:",
+        f"  model:        {info.get('model', '?')} ({info.get('app', '?')}, gen {info.get('gen', '?')}, firmware {info.get('ver', '?')})",
+        f"  id:           {info.get('id', '?')}",
+        f"  power:        {status.get('apower', '?')} W, {status.get('voltage', '?')} V, {status.get('current', '?')} A",
+        f"  energy total: {energy.get('total', '?')} Wh",
+    ]
+
+
 def suggestions(devices: list[dict[str, Any]]) -> list[str]:
     api_key = shlex.quote(os.environ.get(config.ENV_SENSIBO_API_KEY, "").strip())
     lines = [
@@ -107,6 +124,15 @@ def suggestions(devices: list[dict[str, Any]]) -> list[str]:
         user_agent = "termostat/0.1 your-email@example.com"
     lines.append(f"{config.ENV_METNO_USER_AGENT}={shlex.quote(user_agent)}")
 
+    lines += ["", "# Optional: Shelly power meter on the heat pump's supply (local IP or host name)"]
+    host = os.environ.get(config.ENV_SHELLY_HOST, "").strip()
+    lines.append(f"{config.ENV_SHELLY_HOST}={shlex.quote(host)}" if host else f"# {config.ENV_SHELLY_HOST}=192.168.1.50")
+    lines.append("# Only if the plug has a password set (user name is always admin)")
+    password = os.environ.get(config.ENV_SHELLY_PASSWORD, "").strip()
+    lines.append(
+        f"{config.ENV_SHELLY_PASSWORD}={shlex.quote(password)}" if password else f"# {config.ENV_SHELLY_PASSWORD}="
+    )
+
     lines += [
         "",
         "# Optional: database location",
@@ -140,6 +166,9 @@ def main(argv: list[str] | None = None) -> int:
     current = os.environ.get(config.ENV_SENSIBO_DEVICE_ID, "").strip()
     if current and current not in {d.get("id") for d in devices}:
         print(f"Warning: {config.ENV_SENSIBO_DEVICE_ID}={current} does not match any device.\n", file=sys.stderr)
+
+    if shelly_config := config.shelly_config():
+        print("\n".join(describe_shelly(ShellyClient(shelly_config))) + "\n", file=sys.stderr)
 
     print("Suggested environment file:\n", file=sys.stderr)
     print("\n".join(suggestions(devices)))

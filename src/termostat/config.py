@@ -16,6 +16,8 @@ ENV_LONGITUDE = "TERMOSTAT_LONGITUDE"
 ENV_ALTITUDE = "TERMOSTAT_ALTITUDE"
 ENV_METNO_USER_AGENT = "METNO_USER_AGENT"
 ENV_DB = "TERMOSTAT_DB"
+ENV_SHELLY_HOST = "SHELLY_HOST"
+ENV_SHELLY_PASSWORD = "SHELLY_PASSWORD"
 
 
 def _require(name: str) -> str:
@@ -46,6 +48,12 @@ class WeatherConfig:
     user_agent: str
 
 
+@dataclass(frozen=True)
+class ShellyConfig:
+    host: str
+    password: str | None
+
+
 def sensibo_api_key() -> str:
     return _require(ENV_SENSIBO_API_KEY)
 
@@ -71,6 +79,15 @@ def weather_config() -> WeatherConfig:
 
     user_agent = _require(ENV_METNO_USER_AGENT)
     return WeatherConfig(latitude, longitude, altitude, user_agent)
+
+
+def shelly_config() -> ShellyConfig | None:
+    """The Shelly plug measuring the heat pump's power, or None if not configured."""
+    host = os.environ.get(ENV_SHELLY_HOST, "").strip()
+    if not host:
+        return None
+    password = os.environ.get(ENV_SHELLY_PASSWORD, "").strip() or None
+    return ShellyConfig(host, password)
 
 
 def database_path() -> Path:

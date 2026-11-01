@@ -14,6 +14,7 @@ _Last updated: 2026-11-01 (second review, 8.5 days of logging; step tests writte
 | Install-time backfill | Ran `termostat-backfill --days 1` (24 hours is the account's history limit) |
 | `termostat-report` | Available for reviewing history |
 | `termostat-steptest.timer` | Written 2026-11-01, **not yet deployed**. Every 5 minutes; decides just after midnight, steps the setpoint ±2, restores at 05:30 local time |
+| Power metering | Shelly Plug PM Gen3 ordered 2026-11-01. Metering only, no relay. Logging code written (`power_readings`), **untested until the plug is delivered**; off while `SHELLY_HOST` is unset |
 | Controller (phase 3) | Not started |
 
 ### Verified against the real APIs (review of 2026-10-28)
@@ -98,6 +99,18 @@ Only the stretch 10-23 21:00 to 10-25 07:52 (about 35 hours, setpoint 18, fan lo
 - **Possibly the fan level matters more than the setpoint, but this is confounded.** At 21 / low the Sky plateaued at 20.6 for 1.5 hours. After the setpoint was lowered to 20 and the fan raised to medium_low (10-27 16:16), the Sky rose to 21.2–21.4 by evening, with outdoor temperature falling from 12.4 to 9.8. If the unit idled above a setpoint-determined floor, lowering the setpoint should not have heated the room more, which weakens the "floor = setpoint + 1.3" hypothesis. However, humidity rose to 84% at about 18:00 UTC, which suggests cooking, so the evening rise may be partly other heat. Needs the step test, ideally with power data. Was there cooking that evening?
 - **The previous automation is off.** Before logging started, a Sensibo schedule moved the setpoint between 17, 18 and 19, and Tibber events appeared. The last of both was on 10-23 at about 17:40. Nothing since. If they were not turned off deliberately, check Sensibo, because they would conflict with the controller.
 - **Setpoint 20 and medium_low since 10-27 16:16.** The Sky has read 20.6 – 21.9 since (21.5 at 17:20 on 10-28). Is about 21 the comfort target?
+
+## When the Shelly plug arrives
+
+Testing is deferred until delivery. The response format is taken from the Shelly Gen2+ API documentation and has not been verified.
+
+1. Check the plug's rated current against the heat pump's rating plate (maximum and start-up current) before plugging the heat pump in.
+2. Shelly app or web UI: connect it to Wi-Fi, update the firmware, give it a DHCP reservation. Optionally set a password.
+3. Add `SHELLY_HOST` (and `SHELLY_PASSWORD`) to `~/.config/termostat/env`. No reinstall needed.
+4. `termostat-configure > /dev/null` should show the plug's model and plausible power. If it reports an RPC error, the device may not use the `PM1` component: check `http://<host>/rpc/Shelly.GetStatus` for the component name and adjust `shelly.py`.
+5. `termostat-log`, then check the stored row: `sqlite3 $DB "SELECT * FROM power_readings ORDER BY id DESC LIMIT 1"`. Verify that `apower`, `aenergy_total` and `aenergy_by_minute` are populated, and whether `by_minute[0]` is the current partial minute or the last complete one (compare `aenergy_minute_ts` with `logged_at`).
+6. Write unit tests for `shelly.py` from a real response saved from step 5.
+7. After a day: the 5-minute mean power from `aenergy_total` differences against setpoint, indoor and outdoor temperature. Is the compressor cycling, and how fast?
 
 ## Review checklist
 
@@ -254,7 +267,7 @@ Taken from `ac_state_changes`, all `UserRequest` (so app changes; the remote is 
 3. **Sensor placement.** Based on reference readings: is the Sky representative, and how much of the +1.3 offset is sensor placement?
 4. **Length of phase 1.** Decided 2026-11-01: step test now, repeat in the cold (raise `runs_per_kind`).
 5. **Step test plan (phase 2).** Implemented as `termostat-steptest` (see above). Original plan: pick a night with stable weather and nobody touching the heat pump: fixed fan level, setpoint +2 °C, hold 6–12 hours or until settled, then back. Also use the test to answer: does the unit idle above its floor, and does the plateau follow the setpoint one for one? Optionally a fan level step on another night. Needs a small command to set the state at a scheduled time, or can be done manually in the Sensibo app with the time noted here.
-6. **Power metering.** This is now the most useful additional input: it would show compressor activity directly and turn the floor hypothesis into a fact (HAN port / smart plug).
+6. **Power metering.** Decided 2026-11-01: Shelly Plug PM Gen3 ordered (see "When the Shelly plug arrives").
 7. **Other inputs.** Local outdoor sensor, electricity prices (Tibber was in use before), forecast cloud cover as a solar gain feed-forward.
 8. **Existing automation.** Confirm the Sensibo schedule and Tibber integration are deliberately off.
 
@@ -279,5 +292,6 @@ Taken from `ac_state_changes`, all `UserRequest` (so app changes; the remote is 
 | 2026-10-28 19:09:14 CET (18:09:14 UTC) | Backfill timer and UTC logger timer deployed to the NixOS host (unit file mtimes) after the push was forgotten once; confirmed with `systemctl --user list-timers` at 19:09:47 CET (18:09:47 UTC): `termostat-log.timer` next 19:10:20 CET, last 19:05:12 CET; `termostat-backfill.timer` next 19:20:52 CET, not yet run |
 | 2026-11-01 | Second review: logging healthy; floor hypothesis rejected; 10-31 accidental step gives τ ≈ 3.4 h, gain ≈ 0.83 |
 | 2026-11-01 | Comfort minimum 20.0 °C, target as close above it as possible |
+| 2026-11-01 | Shelly Plug PM Gen3 ordered for power metering; metering only (no relay); logging into `power_readings` written, testing deferred until delivery |
 | 2026-11-01 | Step tests now rather than waiting for cold: autonomous `termostat-steptest`, heat +2 then cool −2, 00:00–05:30 local, gated on forecast and room stability, everything recorded in the database |
 | | |

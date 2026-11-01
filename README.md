@@ -51,6 +51,8 @@ journalctl --user -u termostat-log -n 50              # logs and errors
 | `TERMOSTAT_ALTITUDE` | no | Altitude in metres above sea level; improves forecast temperature |
 | `METNO_USER_AGENT` | yes | Identifies the app to MET Norway, e.g. `termostat/0.1 you@example.com` ([terms of service](https://api.met.no/doc/TermsOfService)) |
 | `TERMOSTAT_DB` | no | SQLite database path, default `~/.local/share/termostat/termostat.db` |
+| `SHELLY_HOST` | no | IP address or host name of the Shelly power meter (Plug PM Gen3) on the heat pump's supply; power logging is off when unset |
+| `SHELLY_PASSWORD` | no | The plug's password, if set (user name is always `admin`) |
 
 The file uses `KEY=value` lines, which work both as a systemd `EnvironmentFile` and in a shell (`set -a; . ~/.config/termostat/env; set +a`). Keep it private, since it contains the API key.
 
@@ -60,7 +62,7 @@ The file uses `KEY=value` lines, which work both as a systemd `EnvironmentFile` 
 termostat-log
 ```
 
-Run by `termostat-log.timer` every 5 minutes (scheduled in UTC, so the timer does not skip the repeated hour when daylight saving time ends). Each run stores one row in `readings` (indoor measurements, AC state including fan level, and outdoor conditions interpolated from the current forecast), new entries from the Sensibo AC state history in `ac_state_changes`, and a new forecast in `forecasts`/`forecast_steps` when the cached one has expired. The exit code is non-zero if any part failed, so the failure shows up in `systemctl --user status termostat-log`.
+Run by `termostat-log.timer` every 5 minutes (scheduled in UTC, so the timer does not skip the repeated hour when daylight saving time ends). Each run stores one row in `readings` (indoor measurements, AC state including fan level, and outdoor conditions interpolated from the current forecast), new entries from the Sensibo AC state history in `ac_state_changes`, and a new forecast in `forecasts`/`forecast_steps` when the cached one has expired. When `SHELLY_HOST` is set, it also stores the heat pump's power, voltage, current and energy counter from the Shelly meter in `power_readings`. `termostat-configure` shows the meter's model and current power when `SHELLY_HOST` is set. The exit code is non-zero if any part failed, so the failure shows up in `systemctl --user status termostat-log`.
 
 ## Backfill
 

@@ -85,6 +85,23 @@ CREATE TABLE IF NOT EXISTS metno_cache (
     last_modified TEXT
 );
 
+-- Heat pump power from the Shelly power meter, one row per logger run (see shelly.py).
+CREATE TABLE IF NOT EXISTS power_readings (
+    id INTEGER PRIMARY KEY,
+    logged_at TEXT NOT NULL,
+    host TEXT NOT NULL,
+    apower REAL,                         -- active power now, W
+    voltage REAL,                        -- V
+    current REAL,                        -- A
+    freq REAL,                           -- Hz
+    aenergy_total REAL,                  -- energy counter since manufacture/reset, Wh
+    aenergy_by_minute TEXT,              -- JSON: energy per minute for the last 3 minutes, mWh, newest first
+    aenergy_minute_ts INTEGER,           -- Unix time of the first second of the newest minute
+    errors TEXT,                         -- JSON list of error flags, if any
+    raw TEXT
+);
+CREATE INDEX IF NOT EXISTS power_readings_logged_at ON power_readings(logged_at);
+
 -- One row per night the step test timer considered (see steptest.py).
 CREATE TABLE IF NOT EXISTS step_tests (
     id INTEGER PRIMARY KEY,

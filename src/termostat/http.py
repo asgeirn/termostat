@@ -21,12 +21,18 @@ class Response:
         return json.loads(self.body)
 
 
-def get(url: str, headers: dict[str, str] | None = None, timeout: float = DEFAULT_TIMEOUT) -> Response:
+def get(
+    url: str,
+    headers: dict[str, str] | None = None,
+    timeout: float = DEFAULT_TIMEOUT,
+    digest_auth: tuple[str, str] | None = None,
+) -> Response:
     """GET a URL. Non-2xx responses (including 304) are returned, not raised.
 
-    Network failures raise OSError (urllib.error.URLError, TimeoutError).
+    Network failures raise OSError (urllib.error.URLError, TimeoutError). digest_auth is a
+    (username, password) pair for HTTP digest authentication.
     """
-    return request("GET", url, headers, timeout=timeout)
+    return request("GET", url, headers, timeout=timeout, digest_auth=digest_auth)
 
 
 def request(
@@ -35,6 +41,7 @@ def request(
     headers: dict[str, str] | None = None,
     body: Any = None,
     timeout: float = DEFAULT_TIMEOUT,
+    digest_auth: tuple[str, str] | None = None,
 ) -> Response:
     """Send a request, with body (if not None) encoded as JSON. Errors are handled as in get()."""
     headers = {"Accept-Encoding": "gzip", **(headers or {})}
@@ -43,8 +50,13 @@ def request(
         data = json.dumps(body).encode()
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
+    opener = urllib.request.build_opener()
+    if digest_auth is not None:
+        passwords = urllib.request.HTTPPasswordMgrWithDefaultRealm()
+        passwords.add_password(None, url, *digest_auth)
+        opener = urllib.request.build_opener(urllib.request.HTTPDigestAuthHandler(passwords))
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with opener.open(request, timeout=timeout) as response:
             status, response_headers, body = response.status, response.headers, response.read()
     except urllib.error.HTTPError as error:
         status, response_headers, body = error.code, error.headers, error.read()
