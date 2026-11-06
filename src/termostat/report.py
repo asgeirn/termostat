@@ -1,4 +1,4 @@
-"""Report logged history: indoor and outdoor conditions, setpoint and fan level over time."""
+"""Report logged history: indoor and outdoor conditions, setpoint, fan level and power over time."""
 
 import argparse
 import csv
@@ -18,6 +18,8 @@ from termostat.timeutil import iso, parse_iso, utc_now
 
 INTERVALS = ("raw", "15m", "hour", "day")
 SPARK = "▁▂▃▄▅▆▇█"
+# Consecutive power readings further apart than this are not used for mean power (logger outage).
+MAX_POWER_GAP = timedelta(minutes=15)
 
 
 @dataclass
@@ -25,6 +27,20 @@ class Sample:
     time: datetime
     temperature: float | None
     humidity: float | None
+
+
+@dataclass
+class PowerInterval:
+    """Energy used between two consecutive power readings, from the meter's energy counter."""
+
+    end: datetime
+    seconds: float
+    energy_wh: float
+    apower: float | None  # instantaneous power at the end
+
+    @property
+    def mean_power(self) -> float:
+        return self.energy_wh * 3600 / self.seconds
 
 
 @dataclass
@@ -39,6 +55,9 @@ class Bucket:
     fans: list[str] = field(default_factory=list)
     on: list[int] = field(default_factory=list)
     readings: int = 0
+    energy_wh: float = 0.0
+    power_seconds: float = 0.0
+    apower: list[float] = field(default_factory=list)
 
 
 # --- Loading ----------------------------------------------------------------
@@ -69,6 +88,26 @@ def load_changes(conn: sqlite3.Connection, device_id: str | None, since: datetim
         query += " AND device_id = ?"
         params.append(device_id)
     return conn.execute(query + " ORDER BY changed_at", params).fetchall()
+
+
+def load_power(conn: sqlite3.Connection, since: datetime, until: datetime) -> list[PowerInterval]:
+    """Power intervals ending in [since, until), using one earlier reading to start the first one.
+
+    Intervals longer than MAX_POWER_GAP, or where the counter went backwards (meter reset), are left out.
+    """
+    rows = conn.execute(
+        """SELECT logged_at, apower, aenergy_total FROM power_readings
+           WHERE logged_at >= ? AND logged_at < ? AND aenergy_total IS NOT NULL ORDER BY logged_at""",
+        (iso(since - MAX_POWER_GAP), iso(until)),
+    ).fetchall()
+    intervals = []
+    for prev, row in zip(rows, rows[1:]):
+        end = parse_iso(row["logged_at"])
+        seconds = (end - parse_iso(prev["logged_at"])).total_seconds()
+        energy = row["aenergy_total"] - prev["aenergy_total"]
+        if end >= since and 0 < seconds <= MAX_POWER_GAP.total_seconds() and energy >= 0:
+            intervals.append(PowerInterval(end, seconds, energy, row["apower"]))
+    return intervals
 
 
 def reading_time(row: sqlite3.Row) -> datetime:
@@ -110,7 +149,10 @@ def bucket_start(dt: datetime, interval: str, utc: bool) -> datetime:
     raise ValueError(interval)
 
 
-def build_buckets(readings: list[sqlite3.Row], samples: list[Sample], interval: str, utc: bool) -> list[Bucket]:
+def build_buckets(
+    readings: list[sqlite3.Row], samples: list[Sample], interval: str, utc: bool,
+    power: list[PowerInterval] = (),
+) -> list[Bucket]:
     buckets: dict[datetime, Bucket] = {}
 
     def get(dt: datetime) -> Bucket:
@@ -136,6 +178,13 @@ def build_buckets(readings: list[sqlite3.Row], samples: list[Sample], interval: 
             bucket = get(sample.time)
             _append(bucket.indoor, sample.temperature)
             _append(bucket.humidity, sample.humidity)
+
+    # Each interval counts towards the bucket its end falls in. Under "raw" that is a bucket of its own.
+    for item in power:
+        bucket = get(item.end)
+        bucket.energy_wh += item.energy_wh
+        bucket.power_seconds += item.seconds
+        _append(bucket.apower, item.apower)
 
     return [buckets[key] for key in sorted(buckets)]
 
@@ -174,6 +223,9 @@ def bucket_record(bucket: Bucket) -> dict[str, Any]:
         "fan_level": _most_common(bucket.fans),
         "fan_levels": sorted(set(bucket.fans)),
         "on_fraction": _round(_mean([float(v) for v in bucket.on]), 2),
+        "power_mean": _round(bucket.energy_wh * 3600 / bucket.power_seconds, 0) if bucket.power_seconds else None,
+        "power_max": max(bucket.apower) if bucket.apower else None,
+        "energy_wh": _round(bucket.energy_wh, 1) if bucket.power_seconds else None,
         "readings": bucket.readings,
         "indoor_samples": len(bucket.indoor),
     }
@@ -191,6 +243,7 @@ def summarize(
     samples: list[Sample],
     changes: list[sqlite3.Row],
     target: float | None,
+    power: list[PowerInterval] = (),
 ) -> dict[str, Any]:
     indoor = [s.temperature for s in samples if s.temperature is not None]
     humidity = [s.humidity for s in samples if s.humidity is not None]
@@ -210,6 +263,17 @@ def summarize(
         "on_fraction": _round(_mean([float(v) for v in on]), 2),
         "ac_state_changes": dict(Counter(c["reason"] or "unknown" for c in changes).most_common()),
     }
+    if power:
+        energy = sum(p.energy_wh for p in power)
+        seconds = sum(p.seconds for p in power)
+        mean_powers = [p.mean_power for p in power]
+        summary["power"] = {
+            "energy_kwh": round(energy / 1000, 2),
+            "mean": round(energy * 3600 / seconds),
+            "min": round(min(mean_powers)),
+            "max": round(max(mean_powers)),
+            "hours": round(seconds / 3600, 1),
+        }
     if target is not None and indoor:
         errors = [t - target for t in indoor]
         summary["target"] = {
@@ -305,6 +369,11 @@ def render_table(
         out.append("Fan:       " + ", ".join(f"{k} {v / total:.0%}" for k, v in s["fan_levels"].items()))
     if s["on_fraction"] is not None:
         out.append(f"AC on:     {s['on_fraction']:.0%} of readings")
+    if p := s.get("power"):
+        out.append(
+            f"Power:     mean {p['mean']} W, 5-minute means {p['min']}–{p['max']} W, "
+            f"{p['energy_kwh']:.2f} kWh over {p['hours']:.1f} h"
+        )
     if s["ac_state_changes"]:
         out.append("Changes:   " + ", ".join(f"{k} ×{v}" for k, v in s["ac_state_changes"].items()))
     if t := s.get("target"):
@@ -316,14 +385,19 @@ def render_table(
     out.append(f"Samples:   {s['readings']} readings, {s['indoor_samples']} indoor measurements")
 
     records = [bucket_record(b) for b in buckets]
+    has_power = "power" in s
     if len(records) > 1:
         out += [
             "",
             f"Indoor  {sparkline([r['indoor_mean'] for r in records])}",
             f"Outdoor {sparkline([r['outdoor_mean'] for r in records])}",
         ]
+        if has_power:
+            out.append(f"Power   {sparkline([r['power_mean'] for r in records])}")
 
     headers = ["Time", "Indoor °C", "Min–max", "RH %", "Out °C", "Wind", "Cloud %", "Setpoint", "Fan", "On"]
+    if has_power:
+        headers += ["Power W", "Max W", "kWh"]
     rows = [
         [
             label(b.start, interval),
@@ -337,6 +411,15 @@ def render_table(
             "/".join(r["fan_levels"]) or "–",
             "–" if r["on_fraction"] is None else f"{r['on_fraction']:.0%}",
         ]
+        + (
+            [
+                _fmt(r["power_mean"], 0),
+                _fmt(r["power_max"], 0),
+                "–" if r["energy_wh"] is None else f"{r['energy_wh'] / 1000:.2f}",
+            ]
+            if has_power
+            else []
+        )
         for b, r in zip(buckets, records)
     ]
     out += ["", *_table(headers, rows)]
@@ -374,7 +457,8 @@ def _table(headers: list[str], rows: list[list[str]]) -> list[str]:
 
 CSV_FIELDS = [
     "start", "indoor_mean", "indoor_min", "indoor_max", "humidity_mean", "outdoor_mean", "wind_mean",
-    "cloud_mean", "setpoint_min", "setpoint_max", "fan_level", "on_fraction", "readings", "indoor_samples",
+    "cloud_mean", "setpoint_min", "setpoint_max", "fan_level", "on_fraction", "power_mean", "power_max",
+    "energy_wh", "readings", "indoor_samples",
 ]
 
 
@@ -465,6 +549,7 @@ def main(argv: list[str] | None = None) -> int:
         readings = load_readings(conn, device_id, since, until)
         historical = load_historical(conn, device_id, since, until)
         changes = load_changes(conn, device_id, since, until)
+        power = load_power(conn, since, until)
     finally:
         conn.close()
 
@@ -477,8 +562,8 @@ def main(argv: list[str] | None = None) -> int:
         summary_samples = [Sample(reading_time(r), r["temperature"], r["humidity"]) for r in readings]
     else:
         summary_samples = samples
-    buckets = build_buckets(readings, samples, interval, args.utc)
-    summary = summarize(readings, summary_samples, changes, args.target)
+    buckets = build_buckets(readings, samples, interval, args.utc, power)
+    summary = summarize(readings, summary_samples, changes, args.target, power)
 
     match args.format:
         case "table":

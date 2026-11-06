@@ -95,8 +95,8 @@ CREATE TABLE IF NOT EXISTS power_readings (
     current REAL,                        -- A
     freq REAL,                           -- Hz
     aenergy_total REAL,                  -- energy counter since manufacture/reset, Wh
-    aenergy_by_minute TEXT,              -- JSON: energy per minute for the last 3 minutes, mWh, newest first
-    aenergy_minute_ts INTEGER,           -- Unix time of the first second of the newest minute
+    aenergy_by_minute TEXT,              -- JSON: energy per complete minute for the last 3 minutes, mWh, newest first
+    aenergy_minute_ts INTEGER,           -- Unix time the newest complete minute ends (start of the current one)
     errors TEXT,                         -- JSON list of error flags, if any
     raw TEXT
 );

@@ -7,7 +7,7 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from termostat import backfill, db, logger, report
+from termostat import backfill, db, logger, report, shelly
 
 START = datetime(2026, 1, 15, 0, 0, tzinfo=UTC)
 
@@ -43,6 +43,16 @@ class ReportTest(unittest.TestCase):
                   "changedProperties": ["targetTemperature"], "acState": {"on": True, "mode": "heat", "targetTemperature": 23}}],
                 START,
             )
+            # Power every 5 minutes from hour 4: 600 W (50 Wh per 5 minutes), with a 30-minute outage
+            # in hour 5 and a counter reset at the end.
+            total = 1000.0
+            for i in range(25):
+                if 14 <= i < 20:
+                    continue
+                now = START + timedelta(hours=4, minutes=5 * i)
+                total = 1000.0 + 50.0 * i if i < 24 else 0.0
+                status = {"apower": 590.0 + i, "aenergy": {"total": total}}
+                shelly.store_power_reading(conn, "plug", status, now)
         conn.close()
 
     def tearDown(self) -> None:
@@ -84,7 +94,8 @@ class ReportTest(unittest.TestCase):
 
     def test_raw_uses_readings_only(self) -> None:
         data = json.loads(self.run_report("--format", "json", "--interval", "raw"))
-        self.assertEqual(len(data["buckets"]), 36)
+        # Power readings at 5-minute marks without a reading get rows of their own.
+        self.assertEqual(sum(b["readings"] for b in data["buckets"]), 36)
         self.assertEqual(data["buckets"][0]["indoor_mean"], 21.0)
         self.assertEqual(data["summary"]["indoor_samples"], 36)
 
@@ -101,6 +112,35 @@ class ReportTest(unittest.TestCase):
         self.assertIn("Target:    21.5 °C", text)
         self.assertIn("UserRequest", text)
         self.assertIn("2026-01-15 05:45", text)
+
+    def test_power(self) -> None:
+        data = json.loads(self.run_report("--format", "json", "--interval", "hour"))
+        buckets = data["buckets"]
+        self.assertIsNone(buckets[3]["power_mean"])
+        # Hour 4: intervals ending 04:05 to 04:55 (the 04:00 reading only starts the first one).
+        self.assertEqual((buckets[4]["power_mean"], buckets[4]["energy_wh"]), (600.0, 550.0))
+        self.assertEqual(buckets[4]["power_max"], 601.0)
+        # Hour 5: 05:00 to 05:05, then the gap after 05:05, then 05:40 to 05:55; the reset at 06:00 is outside.
+        self.assertEqual((buckets[5]["power_mean"], buckets[5]["energy_wh"]), (600.0, 250.0))
+        self.assertEqual(data["summary"]["power"], {"energy_kwh": 0.8, "mean": 600, "min": 600, "max": 600, "hours": 1.3})
+
+    def test_power_counter_reset_is_skipped(self) -> None:
+        conn = db.connect(self.path)
+        try:
+            intervals = report.load_power(conn, START + timedelta(hours=5), START + timedelta(hours=7))
+        finally:
+            conn.close()
+        self.assertEqual([i.end.strftime("%H:%M") for i in intervals], ["05:00", "05:05", "05:45", "05:50", "05:55"])
+
+    def test_table_with_and_without_power(self) -> None:
+        text = self.run_report("--interval", "hour")
+        self.assertIn("Power:     mean 600 W", text)
+        self.assertIn("Max W", text)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            report.main(["--db", str(self.path), "--device", "abc", "--utc",
+                         "--since", "2026-01-15T00:00", "--until", "2026-01-15T03:00"])
+        self.assertNotIn("Power", out.getvalue())
 
     def test_default_interval(self) -> None:
         self.assertEqual(report.default_interval(START, START + timedelta(hours=6)), "15m")

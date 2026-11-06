@@ -105,6 +105,8 @@ termostat-report --days 30 --interval hour --format csv > history.csv
 
 Shows a summary (indoor, humidity, outdoor, setpoint, fan level, AC state changes and, with `--target`, mean/RMS error and time within ±0.2/±0.5 °C), sparklines, and a table per interval. Intervals are `raw`, `15m`, `hour` or `day`; the default depends on the length of the period. Indoor values use Sensibo's historical measurements where backfilled, otherwise the logged readings. Times are local unless `--utc` is given. `--format csv` and `--format json` are intended for further analysis.
 
+When the period has power readings, the summary, sparklines and table also show the heat pump's power: mean power per interval from the difference in the meter's energy counter between consecutive readings (exact over each 5 minutes, so compressor cycles between samples are included), the largest instantaneous reading, and energy in kWh. Each 5-minute interval counts towards the interval its end falls in. Gaps over 15 minutes and counter resets are left out.
+
 ## Inspecting data
 
 ```sh
