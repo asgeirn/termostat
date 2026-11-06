@@ -4,7 +4,7 @@ _Last updated: 2026-11-06 (third review: both step tests done, Shelly plug insta
 
 ## Where we are
 
-**Phase 1 (logger) is running** on the NixOS host. **Phase 2 (step tests) is done:** both tests ran (heat on 11-02, cool on 11-03) and the timer now skips every night (`runs_per_kind` reached). **Power metering is working from the Mac but not yet deployed on the host** (see "Deploy to the host").
+**Phase 1 (logger) is running** on the NixOS host. **Phase 2 (step tests) is done:** both tests ran (heat on 11-02, cool on 11-03) and the timer now skips every night (`runs_per_kind` reached). **Power metering is deployed** and logging on the host since 2026-11-06 06:20 UTC.
 
 | Component | State |
 |---|---|
@@ -14,7 +14,7 @@ _Last updated: 2026-11-06 (third review: both step tests done, Shelly plug insta
 | Install-time backfill | Ran `termostat-backfill --days 1` (24 hours is the account's history limit) |
 | `termostat-report` | Available for reviewing history |
 | `termostat-steptest.timer` | Deployed 2026-11-01 (logger gap 22:00–22:20 UTC is the install). Both tests completed; idle since |
-| Power metering | Shelly Plug PM Gen3 (S3PL-30116EU, firmware 2.1.1) installed 2026-11-06 ~05:57 UTC, HTTPS with a mkcert certificate, password set. Verified from the Mac (`termostat-configure`, `termostat-log` on a database copy). **The host still runs code from before `db21065`**: the downloaded database has no `power_readings` table |
+| Power metering | Shelly Plug PM Gen3 (S3PL-30116EU, firmware 2.1.1) installed 2026-11-06 ~05:57 UTC, HTTPS with a mkcert certificate, password set. Deployed on the host 2026-11-06 (commit `80d00e3`, `SHELLY_CA_FILE` set); first host reading 06:20:31 UTC, 459 W |
 | Controller (phase 3) | Not started |
 
 ### Verified against the real APIs (review of 2026-10-28)
@@ -162,7 +162,7 @@ Only the stretch 10-23 21:00 to 10-25 07:52 (about 35 hours, setpoint 18, fan lo
 
 ## When the Shelly plug arrives
 
-Steps 2–6 done 2026-11-06 from the Mac (see the third review); step 3 additionally needs `SHELLY_CA_FILE` (HTTPS). Step 1 checked: the plug is rated 3.6 kW, the heat pump draws at most 2.4 kW. Remaining: deploy to the host, then step 7.
+Steps 2–6 done 2026-11-06 from the Mac (see the third review); step 3 additionally needs `SHELLY_CA_FILE` (HTTPS). Step 1 checked: the plug is rated 3.6 kW, the heat pump draws at most 2.4 kW. Deployed to the host 2026-11-06. Remaining: step 7.
 
 1. Check the plug's rated current against the heat pump's rating plate (maximum and start-up current) before plugging the heat pump in.
 2. Shelly app or web UI: connect it to Wi-Fi, update the firmware, give it a DHCP reservation. Optionally set a password.
@@ -356,5 +356,6 @@ Taken from `ac_state_changes`, all `UserRequest` (so app changes; the remote is 
 | 2026-11-01 | Shelly Plug PM Gen3 ordered for power metering; metering only (no relay); logging into `power_readings` written, testing deferred until delivery |
 | 2026-11-01 | Step tests now rather than waiting for cold: autonomous `termostat-steptest`, heat +2 then cool −2, 00:00–05:30 local, gated on forecast and room stability, everything recorded in the database |
 | 2026-11-06 | Third review: both step tests completed; τ ≈ 2–2.7 h, no dead time; gain falls with setpoint (≈ 0.8 → 0.45 per degree); own writes show as `UserAPI` |
+| 2026-11-06 | Power logging deployed on the host (`80d00e3`); first `power_readings` row 06:20:31 UTC |
 | 2026-11-06 | Shelly plug installed, served over HTTPS with a mkcert certificate; `SHELLY_HOST` accepts `https://` URLs and `SHELLY_CA_FILE` names the CA to trust |
 | | |
