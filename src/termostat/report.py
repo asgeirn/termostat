@@ -386,6 +386,8 @@ def render_table(
 
     records = [bucket_record(b) for b in buckets]
     has_power = "power" in s
+    # Energy per 5 minutes is a few Wh, so kWh with two decimals only suits long intervals.
+    in_kwh = interval in ("hour", "day")
     if len(records) > 1:
         out += [
             "",
@@ -397,7 +399,7 @@ def render_table(
 
     headers = ["Time", "Indoor °C", "Min–max", "RH %", "Out °C", "Wind", "Cloud %", "Setpoint", "Fan", "On"]
     if has_power:
-        headers += ["Power W", "Max W", "kWh"]
+        headers += ["Power W", "Max W", "kWh" if in_kwh else "Wh"]
     rows = [
         [
             label(b.start, interval),
@@ -415,7 +417,9 @@ def render_table(
             [
                 _fmt(r["power_mean"], 0),
                 _fmt(r["power_max"], 0),
-                "–" if r["energy_wh"] is None else f"{r['energy_wh'] / 1000:.2f}",
+                "–" if r["energy_wh"] is None
+                else f"{r['energy_wh'] / 1000:.2f}" if in_kwh
+                else f"{r['energy_wh']:.1f}",
             ]
             if has_power
             else []

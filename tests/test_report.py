@@ -136,6 +136,8 @@ class ReportTest(unittest.TestCase):
         text = self.run_report("--interval", "hour")
         self.assertIn("Power:     mean 600 W", text)
         self.assertIn("Max W", text)
+        self.assertRegex(text, r"2026-01-15 05:00 .* 600 +613 +0\.25\n")
+        self.assertRegex(self.run_report("--interval", "15m"), r"2026-01-15 04:15 .* 600 +595 +150\.0\n")
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             report.main(["--db", str(self.path), "--device", "abc", "--utc",
