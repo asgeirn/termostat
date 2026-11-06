@@ -16,7 +16,7 @@ _Last updated: 2026-11-06 (third review: both step tests done, Shelly plug insta
 | `termostat-steptest.timer` | Deployed 2026-11-01 (logger gap 22:00–22:20 UTC is the install). Both tests completed; idle since |
 | Power metering | Shelly Plug PM Gen3 (S3PL-30116EU, firmware 2.1.1) installed 2026-11-06 ~05:57 UTC, HTTPS with a mkcert certificate, password set. Deployed on the host 2026-11-06 (commit `80d00e3`, `SHELLY_CA_FILE` set); first host reading 06:20:31 UTC, 459 W |
 | `termostat-power.timer` | Deployed 2026-11-06 (commit `120cd01`), first run 07:43:00 CET (06:43 UTC). Every minute; took over power logging from `termostat-log` |
-| Controller (phase 3) | Not started |
+| Controller (phase 3) | `termostat-control` written 2026-11-06, **shadow mode, not yet deployed**: every 5 minutes, writes nothing, stores decisions in `control_runs` |
 
 ### Verified against the real APIs (review of 2026-10-28)
 
@@ -90,6 +90,22 @@ Database downloaded 2026-11-06 06:01 UTC.
 
 - Setpoint resolution limits precision. Integer °C only (Fahrenheit is not native on this unit and maps one-to-one to the °C values). At night, setpoint 19 gives about 20.0–20.1 (too close to the minimum; the household raised it twice from 19.7–19.9), and 20 gives about 20.6. To hold about 20.2–20.3, the controller will have to **time-proportion between two adjacent setpoints** (e.g. 19 and 20, with a period well under τ, say 30–60 min), with the duty cycle set by an integral term on the Sky temperature.
 - The nonlinear gain (smaller at higher setpoints) and the fast drop when the unit idles mean a plain linear PI with a fixed gain will be detuned somewhere. Schedule the gain on setpoint, or keep the setpoint within a narrow band (19–21) where it is roughly linear.
+
+### Shadow controller (replay, 2026-11-06)
+
+Replayed over the logged readings 2026-10-28 20:00 to 2026-11-06 06:00 UTC (2421 runs, including the two step test nights, which the controller skips when running live):
+
+| | Controller (modelled) | Actual |
+|---|---|---|
+| Mean | 20.36 | 20.74 |
+| Range | 19.8–21.5 | 19.3–21.9 |
+| RMS error against 20.3 | 0.27 | 0.62 |
+| Below 20.0 | 4 % | 7 % |
+| Setpoints used | 18 28 %, 19 39 %, 20 28 %, 21 5 % | mostly 20 (62 %) and 19 (30 %) |
+
+- **The controller would use less heat than the household:** mostly 19 and 18 in the evening, when the room sits at 21+ at setpoint 20 (cooking, evening activity), and alternating 19/20 overnight. The modelled numbers depend on the plateau model, so treat them as an indication.
+- **About 26 setpoint changes a day.** This follows from alternating between whole degrees, not from noise: a longer measurement window or a higher Kp barely changed it. The cycle takes 2·threshold / (d(1−d)) hours at duty d, so halving the number of changes needs twice the threshold and gives roughly twice the ripple. Tuning sweep: Kp 1–3, threshold 0.15–0.5 °C·h and minimum dwell 20–45 min gave 13–39 changes a day; Kp 1 was clearly worse (9–16 % below 20.0). Chosen: Kp 2, threshold 0.3, dwell 30 min.
+- **Not yet handled:** defrosts (no detection yet; the 1-minute power data is for that), outdoor feedforward, a hard low-temperature safety (only relevant once it writes).
 
 ### Power (first observations, 2026-11-06)
 
@@ -360,6 +376,7 @@ Taken from `ac_state_changes`, all `UserRequest` (so app changes; the remote is 
 | 2026-11-01 | Step tests now rather than waiting for cold: autonomous `termostat-steptest`, heat +2 then cool −2, 00:00–05:30 local, gated on forecast and room stability, everything recorded in the database |
 | 2026-11-06 | Third review: both step tests completed; τ ≈ 2–2.7 h, no dead time; gain falls with setpoint (≈ 0.8 → 0.45 per degree); own writes show as `UserAPI` |
 | 2026-11-06 | Power logging deployed on the host (`80d00e3`); first `power_readings` row 06:20:31 UTC |
+| 2026-11-06 | Phase 3 started in shadow mode: PI (Kp 2, Ti 2.5 h, target 20.3) with a sigma-delta quantizer (0.3 °C·h, 30 min dwell), controller sees measured room plus modelled effect of its setpoint |
 | 2026-11-06 | Repeat both step tests (`runs_per_kind` 2), with power metering. Cool test keeps the 05:30 restore: below 20.0 overnight is acceptable as long as the room is back around 08:00 |
 | 2026-11-06 | Step test: refuse nights drifting more than 0.2 °C/h over 2 hours; fit corrects for the 2-hour pre-step drift (uncorrected fit kept). Refit gains: heat 0.18, cool 0.72 |
 | 2026-11-06 | Power logging moved to its own 1-minute timer (`termostat-power`), to resolve compressor stops and defrosts |

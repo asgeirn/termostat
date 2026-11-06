@@ -2,7 +2,7 @@
 
 Automatic temperature control for an air to air heat pump via a Sensibo Sky. See [DESIGN.md](DESIGN.md).
 
-Currently implements **phase 1** (logging) and **phase 2** (autonomous overnight step tests). The step test timer is the only part that writes to the heat pump: it changes the setpoint at night and restores it before morning.
+Currently implements **phase 1** (logging), **phase 2** (autonomous overnight step tests) and **phase 3** in shadow mode (a PI controller that decides but writes nothing). The step test timer is the only part that writes to the heat pump: it changes the setpoint at night and restores it before morning.
 
 ## Installation (NixOS, systemd user timer)
 
@@ -19,8 +19,8 @@ systemd/install.sh                 # rerun to enable the timers
 
 The installer:
 
-- installs `termostat-log.{service,timer}` (every 5 minutes), `termostat-backfill.{service,timer}` (every 6 hours) `termostat-steptest.{service,timer}` (every 5 minutes) and `termostat-power.{service,timer}` (every minute) in `~/.config/systemd/user`,
-- installs `termostat-configure`, `termostat-log`, `termostat-backfill`, `termostat-report`, `termostat-steptest` and `termostat-power` wrappers in `~/.local/bin` (add it to `PATH`, or set `BIN_DIR`); they load `~/.config/termostat/env` automatically,
+- installs `termostat-log.{service,timer}` (every 5 minutes), `termostat-backfill.{service,timer}` (every 6 hours) `termostat-steptest.{service,timer}` (every 5 minutes), `termostat-control.{service,timer}` (every 5 minutes) and `termostat-power.{service,timer}` (every minute) in `~/.config/systemd/user`,
+- installs `termostat-configure`, `termostat-log`, `termostat-backfill`, `termostat-report`, `termostat-steptest`, `termostat-control` and `termostat-power` wrappers in `~/.local/bin` (add it to `PATH`, or set `BIN_DIR`); they load `~/.config/termostat/env` automatically,
 - once the environment file exists, backfills the last 24 hours of Sensibo measurements and enables the timers (`termostat-power.timer` only when `SHELLY_HOST` is set; rerun the installer after setting it).
 
 User timers only run while you are logged in unless lingering is enabled. On NixOS:
@@ -100,6 +100,24 @@ termostat-steptest analyze 2026-11-03   # refit a test from the stored data
 - **Analysis**: after the restore, the last 24 hours of 90 s measurements are fetched and a first order plus dead time model is fitted (`result`, JSON: change from the pre-step level, gain per setpoint degree, time constant, dead time, RMSE, outdoor mean). The fit corrects for the room's drift over the 2 hours before the step: a room cooling at s °C/h would have settled s·τ lower anyway, and that part is not credited to the step. `fit_uncorrected` and `gain_uncorrected` give the fit without this correction. Refit older tests with `termostat-steptest analyze <night>` to get the correction. With a 5.5 hour test and a time constant around 3 hours, the final value is an extrapolation.
 
 All writes and their API responses are in `step_test_events`, so they can be matched against `ac_state_changes` (to see which `reason` Sensibo gives our own writes). Stop the tests with `systemctl --user disable --now termostat-steptest.timer`.
+
+## Controller (shadow mode)
+
+```sh
+termostat-control               # run once (what the timer does)
+termostat-control status        # summary of the last 24 hours
+termostat-control status --days 7
+```
+
+`termostat-control.timer` runs it every 5 minutes, two minutes after the logger. It **writes nothing to the heat pump**: each run stores what it would do as one row in `control_runs`, and the latest row is its state.
+
+- **Input**: the mean of the readings logged in the last 15 minutes. It is inactive (and restarts from the actual setpoint afterwards) when there is no reading from the last 10 minutes, the heat pump is not on in heat mode, the fan is on `auto`, or a step test is running.
+- **PI**: target 20.3 °C, Kp 2, Ti 2.5 h (from the step tests), output limited to setpoints 18–22, with no further integration into a limit.
+- **Whole degrees**: a sigma-delta quantizer alternates between the two nearest setpoints so that the average matches the PI output. It changes setpoint when the accumulated difference reaches 0.3 °C·h, at most once every 30 minutes and by 1 degree at a time.
+- **Shadow model**: the room responds to the household's setpoint, not the controller's, so the controller sees the measured temperature plus the modelled effect of its own setpoint instead (`model_offset`). That effect is the difference between the overnight plateaus measured for the two setpoints (18: 19.3, 19: 20.1, 20: 20.6, 22: 21.5 °C, fan medium_low), approached with a 2.5 hour time constant. Outdoor temperature, sun and cooking come from the real measurement. The result shows how the controller behaves, but is only as accurate as the plateau model.
+- **Status** compares the room as the controller would have run it with the room as measured: mean, range, RMS error against the target, and time below 20.0 °C, plus time at each setpoint and the number of changes.
+
+Settings are in `control.Settings`.
 
 ## Reporting
 

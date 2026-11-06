@@ -1,0 +1,10 @@
+[Unit]
+Description=Termostat: controller every 5 minutes
+
+[Timer]
+# UTC like the logger, two minutes after it, so each run sees the reading just logged.
+OnCalendar=*-*-* *:2/5:00 UTC
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

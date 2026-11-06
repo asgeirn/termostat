@@ -12,6 +12,7 @@ dependencies = []
 [project.scripts]
 termostat-backfill = "termostat.backfill:main"
 termostat-configure = "termostat.configure:main"
+termostat-control = "termostat.control:main"
 termostat-log = "termostat.logger:main"
 termostat-power = "termostat.power:main"
 termostat-report = "termostat.report:main"

@@ -137,6 +137,29 @@ CREATE TABLE IF NOT EXISTS step_test_events (
     detail TEXT                          -- JSON
 );
 CREATE INDEX IF NOT EXISTS step_test_events_test_id ON step_test_events(test_id);
+
+-- One row per controller run (see control.py). The latest row is the controller's state.
+CREATE TABLE IF NOT EXISTS control_runs (
+    id INTEGER PRIMARY KEY,
+    run_at TEXT NOT NULL,
+    mode TEXT NOT NULL,                  -- shadow
+    status TEXT NOT NULL,                -- active, started, inactive
+    reason TEXT,                         -- why inactive, or why (re)started
+    temperature REAL,                    -- measured indoor temperature (mean of recent readings)
+    actual_setpoint INTEGER,             -- setpoint the heat pump actually has
+    fan_level TEXT,
+    model_offset REAL,                   -- shadow: modelled effect of setpoint instead of actual_setpoint
+    controlled_temperature REAL,         -- temperature + model_offset: what the controller sees
+    target REAL,
+    error REAL,                          -- target - controlled_temperature
+    p_term REAL,
+    integral REAL,
+    output REAL,                         -- continuous setpoint from the PI (p_term + integral)
+    quantizer REAL,                      -- accumulated output - setpoint, °C·h
+    setpoint INTEGER,                    -- integer setpoint the controller has chosen
+    changed INTEGER NOT NULL DEFAULT 0   -- 1 if setpoint changed in this run
+);
+CREATE INDEX IF NOT EXISTS control_runs_run_at ON control_runs(run_at);
 """
 
 
