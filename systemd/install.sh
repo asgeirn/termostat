@@ -16,12 +16,14 @@ CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
 UNIT_DIR=$CONFIG_HOME/systemd/user
 ENV_FILE=$CONFIG_HOME/termostat/env
 BIN_DIR=${BIN_DIR:-$HOME/.local/bin}
-UNITS="termostat-log.service termostat-log.timer termostat-backfill.service termostat-backfill.timer termostat-steptest.service termostat-steptest.timer"
+UNITS="termostat-log.service termostat-log.timer termostat-backfill.service termostat-backfill.timer termostat-steptest.service termostat-steptest.timer termostat-power.service termostat-power.timer"
 TIMERS="termostat-log.timer termostat-backfill.timer termostat-steptest.timer"
-COMMANDS="configure log backfill report steptest"
+# Enabled only when SHELLY_HOST is set in the environment file.
+POWER_TIMER="termostat-power.timer"
+COMMANDS="configure log backfill report steptest power"
 
 if [ "${1:-}" = "--uninstall" ]; then
-    systemctl --user disable --now $TIMERS 2>/dev/null || true
+    systemctl --user disable --now $TIMERS $POWER_TIMER 2>/dev/null || true
     for unit in $UNITS; do rm -f "$UNIT_DIR/$unit"; done
     for command in $COMMANDS; do rm -f "$BIN_DIR/termostat-$command"; done
     systemctl --user daemon-reload
@@ -82,6 +84,12 @@ echo "Backfilling the last 24 hours of Sensibo measurements ..."
 "$BIN_DIR/termostat-backfill" --days 1 || echo "Warning: backfill failed; rerun with $BIN_DIR/termostat-backfill"
 
 # Restart as well, so that changed timer specs take effect on a reinstall.
+if grep -Eq '^(export +)?SHELLY_HOST=.' "$ENV_FILE"; then
+    TIMERS="$TIMERS $POWER_TIMER"
+else
+    systemctl --user disable --now $POWER_TIMER 2>/dev/null || true
+    echo "SHELLY_HOST is not set in $ENV_FILE; power logging stays off."
+fi
 systemctl --user enable $TIMERS
 systemctl --user restart $TIMERS
 echo "Enabled timers:"

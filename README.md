@@ -19,9 +19,9 @@ systemd/install.sh                 # rerun to enable the timers
 
 The installer:
 
-- installs `termostat-log.{service,timer}` (every 5 minutes), `termostat-backfill.{service,timer}` (every 6 hours) and `termostat-steptest.{service,timer}` (every 5 minutes) in `~/.config/systemd/user`,
-- installs `termostat-configure`, `termostat-log`, `termostat-backfill`, `termostat-report` and `termostat-steptest` wrappers in `~/.local/bin` (add it to `PATH`, or set `BIN_DIR`); they load `~/.config/termostat/env` automatically,
-- once the environment file exists, backfills the last 24 hours of Sensibo measurements and enables the timers.
+- installs `termostat-log.{service,timer}` (every 5 minutes), `termostat-backfill.{service,timer}` (every 6 hours) `termostat-steptest.{service,timer}` (every 5 minutes) and `termostat-power.{service,timer}` (every minute) in `~/.config/systemd/user`,
+- installs `termostat-configure`, `termostat-log`, `termostat-backfill`, `termostat-report`, `termostat-steptest` and `termostat-power` wrappers in `~/.local/bin` (add it to `PATH`, or set `BIN_DIR`); they load `~/.config/termostat/env` automatically,
+- once the environment file exists, backfills the last 24 hours of Sensibo measurements and enables the timers (`termostat-power.timer` only when `SHELLY_HOST` is set; rerun the installer after setting it).
 
 User timers only run while you are logged in unless lingering is enabled. On NixOS:
 
@@ -63,7 +63,15 @@ The file uses `KEY=value` lines, which work both as a systemd `EnvironmentFile` 
 termostat-log
 ```
 
-Run by `termostat-log.timer` every 5 minutes (scheduled in UTC, so the timer does not skip the repeated hour when daylight saving time ends). Each run stores one row in `readings` (indoor measurements, AC state including fan level, and outdoor conditions interpolated from the current forecast), new entries from the Sensibo AC state history in `ac_state_changes`, and a new forecast in `forecasts`/`forecast_steps` when the cached one has expired. When `SHELLY_HOST` is set, it also stores the heat pump's power, voltage, current and energy counter from the Shelly meter in `power_readings`. `termostat-configure` shows the meter's model and current power when `SHELLY_HOST` is set. The exit code is non-zero if any part failed, so the failure shows up in `systemctl --user status termostat-log`.
+Run by `termostat-log.timer` every 5 minutes (scheduled in UTC, so the timer does not skip the repeated hour when daylight saving time ends). Each run stores one row in `readings` (indoor measurements, AC state including fan level, and outdoor conditions interpolated from the current forecast), new entries from the Sensibo AC state history in `ac_state_changes`, and a new forecast in `forecasts`/`forecast_steps` when the cached one has expired. The exit code is non-zero if any part failed, so the failure shows up in `systemctl --user status termostat-log`.
+
+## Power
+
+```sh
+termostat-power
+```
+
+Run by `termostat-power.timer` every minute when `SHELLY_HOST` is set. Each run stores the heat pump's power, voltage, current and energy counter from the Shelly meter as one row in `power_readings`, so compressor cycles and defrosts are resolved to the minute. `termostat-configure` shows the meter's model and current power when `SHELLY_HOST` is set. Expect about 1440 rows (0.6 MB) a day. A failed reading gives a non-zero exit code, visible in `systemctl --user status termostat-power`.
 
 ## Backfill
 
@@ -105,7 +113,7 @@ termostat-report --days 30 --interval hour --format csv > history.csv
 
 Shows a summary (indoor, humidity, outdoor, setpoint, fan level, AC state changes and, with `--target`, mean/RMS error and time within ±0.2/±0.5 °C), sparklines, and a table per interval. Intervals are `raw`, `15m`, `hour` or `day`; the default depends on the length of the period. Indoor values use Sensibo's historical measurements where backfilled, otherwise the logged readings. Times are local unless `--utc` is given. `--format csv` and `--format json` are intended for further analysis.
 
-When the period has power readings, the summary, sparklines and table also show the heat pump's power: mean power per interval from the difference in the meter's energy counter between consecutive readings (exact over each 5 minutes, so compressor cycles between samples are included), the largest instantaneous reading, and energy (Wh for `raw` and `15m` intervals, kWh for `hour` and `day`). Each 5-minute interval counts towards the interval its end falls in. Gaps over 15 minutes and counter resets are left out.
+When the period has power readings, the summary, sparklines and table also show the heat pump's power: mean power per interval from the difference in the meter's energy counter between consecutive readings (exact over each 5 minutes, so compressor cycles between samples are included), the largest instantaneous reading, and energy (Wh for `raw` and `15m` intervals, kWh for `hour` and `day`). Each 5-minute interval counts towards the interval its end falls in. Gaps over 15 minutes and counter resets are left out. With `--interval raw`, power readings get rows of their own, between the 5-minute readings.
 
 ## Inspecting data
 

@@ -1,0 +1,13 @@
+[Unit]
+Description=Termostat: log heat pump power from the Shelly meter
+Documentation=file://@SRC@/README.md
+
+[Service]
+Type=oneshot
+EnvironmentFile=@ENV_FILE@
+Environment=PYTHONPATH=@SRC@/src
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=@PYTHON@ -m termostat.power
+TimeoutStartSec=50s
+Nice=10
+NoNewPrivileges=yes

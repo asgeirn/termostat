@@ -8,7 +8,6 @@ from termostat import db, logger, metno
 from termostat.config import WeatherConfig
 from termostat.metno import ForecastResponse, MetnoError
 from termostat.sensibo import SensiboError
-from termostat.shelly import ShellyError
 
 NOW = datetime(2026, 1, 15, 12, 30, tzinfo=UTC)
 WEATHER = WeatherConfig(latitude=59.91387, longitude=10.75225, altitude=90, user_agent="test/1.0 test@example.com")
@@ -186,32 +185,6 @@ class RunTest(unittest.TestCase):
         self.assertEqual(failures, 2)
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM readings").fetchone()[0], 0)
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM forecasts").fetchone()[0], 1)
-
-    def test_logs_power(self) -> None:
-        with self.fetch():
-            failures = logger.run(self.conn, FakeSensibo(), "abc123", WEATHER, NOW, FakeMeter())
-        self.assertEqual(failures, 0)
-        row = self.conn.execute("SELECT host, apower, aenergy_total FROM power_readings").fetchone()
-        self.assertEqual(tuple(row), ("plug", 82.1, 20.411))
-
-    def test_power_failure_is_reported(self) -> None:
-        with self.fetch():
-            failures = logger.run(self.conn, FakeSensibo(), "abc123", WEATHER, NOW, FakeMeter(fail=True))
-        self.assertEqual(failures, 1)
-        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM readings").fetchone()[0], 1)
-        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM power_readings").fetchone()[0], 0)
-
-
-class FakeMeter:
-    host = "plug"
-
-    def __init__(self, fail: bool = False) -> None:
-        self.fail = fail
-
-    def get_meter_status(self):
-        if self.fail:
-            raise ShellyError("PM1.GetStatus failed: timed out")
-        return {"id": 0, "apower": 82.1, "aenergy": {"total": 20.411, "by_minute": [1275.698], "minute_ts": 1}}
 
 
 if __name__ == "__main__":

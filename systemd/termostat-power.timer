@@ -1,0 +1,11 @@
+[Unit]
+Description=Termostat: log heat pump power every minute
+
+[Timer]
+# Every minute, so compressor cycles and defrosts are resolved. The meter is on the LAN,
+# so there is no need to spread requests; a tight accuracy keeps the samples evenly spaced.
+OnCalendar=*-*-* *:*:00 UTC
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

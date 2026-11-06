@@ -1,4 +1,6 @@
-"""Phase 1: log indoor measurements, AC state, weather forecast and heat pump power. No control.
+"""Phase 1: log indoor measurements, AC state and weather forecast. No control.
+
+Heat pump power is logged separately, every minute, by termostat-power.
 
 Intended to run from cron every 5-10 minutes.
 """
@@ -15,19 +17,12 @@ from termostat import config, db, metno
 from termostat.config import ConfigError, WeatherConfig
 from termostat.metno import ForecastStep, MetnoError
 from termostat.sensibo import SensiboClient, SensiboError
-from termostat.shelly import ShellyClient, ShellyError, store_power_reading
 from termostat.timeutil import iso, parse_iso, parse_sensibo_time, utc_now
 
 DEVICE_FIELDS = ["id", "measurements", "acState", "connectionStatus"]
 
 # Used when met.no does not send a usable Expires header.
 DEFAULT_FORECAST_TTL = timedelta(minutes=30)
-
-
-class PowerSource(Protocol):
-    host: str
-
-    def get_meter_status(self) -> dict[str, Any]: ...
 
 
 class DeviceSource(Protocol):
@@ -221,7 +216,6 @@ def run(
     device_id: str,
     weather: WeatherConfig,
     now: datetime,
-    power: PowerSource | None = None,
 ) -> int:
     """Run one logging cycle. Returns the number of failed steps."""
     failures = 0
@@ -257,15 +251,6 @@ def run(
         warn(f"AC state history: {error}")
         failures += 1
 
-    if power is not None:
-        try:
-            status = power.get_meter_status()
-            with conn:
-                store_power_reading(conn, power.host, status, now)
-        except ShellyError as error:
-            warn(f"power reading: {error}")
-            failures += 1
-
     return failures
 
 
@@ -280,17 +265,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         sensibo_config = config.sensibo_config()
         weather = config.weather_config()
-        shelly_config = config.shelly_config()
     except ConfigError as error:
         warn(str(error))
         return 2
 
     conn = db.connect(args.db or config.database_path())
     try:
-        power = ShellyClient(shelly_config) if shelly_config else None
-        failures = run(
-            conn, SensiboClient(sensibo_config.api_key), sensibo_config.device_id, weather, utc_now(), power
-        )
+        failures = run(conn, SensiboClient(sensibo_config.api_key), sensibo_config.device_id, weather, utc_now())
     finally:
         conn.close()
     return 1 if failures else 0

@@ -13,6 +13,7 @@ dependencies = []
 termostat-backfill = "termostat.backfill:main"
 termostat-configure = "termostat.configure:main"
 termostat-log = "termostat.logger:main"
+termostat-power = "termostat.power:main"
 termostat-report = "termostat.report:main"
 termostat-steptest = "termostat.steptest:main"
 

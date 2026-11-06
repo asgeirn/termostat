@@ -140,7 +140,7 @@ A Shelly Plug PM Gen3 (S3PL-30116EU) was ordered on 2026-11-01 and installed on 
 How it is read:
 
 - Local Gen2+ RPC API on the LAN, no cloud (HTTPS with a mkcert certificate installed on the plug, so the password is not sent in the clear): `GET http://<host>/rpc/PM1.GetStatus?id=0` gives instantaneous power (`apower`, W), voltage, current, frequency, the energy counter (`aenergy.total`, Wh) and energy per minute for the last three minutes (`aenergy.by_minute`, mWh).
-- `termostat-log` reads it on every run and stores one row in `power_readings`, including the raw response. The difference in `aenergy.total` between two runs gives the exact mean power over the 5 minutes, so short compressor cycles between samples are not lost. `by_minute` adds 1-minute resolution for 3 of every 5 minutes. If cycling turns out to be faster than that, add a separate 1-minute power timer.
+- `termostat-power` reads it every minute from its own timer and stores one row in `power_readings`, including the raw response. The difference in `aenergy.total` between two runs gives the exact mean power over the minute, so short compressor cycles are not lost. (It was first read by `termostat-log` every 5 minutes; a 1-minute timer was added on 2026-11-06 to resolve compressor stops and defrosts.)
 - A failed power reading is logged as a warning and counts as a failed step, like the other sources, but never stops the rest of the run.
 
 Installation:
