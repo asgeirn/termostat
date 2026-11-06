@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-06 (third review: both step tests done, Shelly plug installed). Next review: after a few days of power data, or after the first real cold spell._
+_Last updated: 2026-11-06 (third review: both step tests done, Shelly plug installed, shadow controller deployed). Next review: around 2026-11-09, after the repeat step tests and a few days of 1-minute power and shadow controller data._
 
 ## Where we are
 
@@ -16,7 +16,7 @@ _Last updated: 2026-11-06 (third review: both step tests done, Shelly plug insta
 | `termostat-steptest.timer` | Deployed 2026-11-01 (logger gap 22:00–22:20 UTC is the install). Both tests completed; idle since |
 | Power metering | Shelly Plug PM Gen3 (S3PL-30116EU, firmware 2.1.1) installed 2026-11-06 ~05:57 UTC, HTTPS with a mkcert certificate, password set. Deployed on the host 2026-11-06 (commit `80d00e3`, `SHELLY_CA_FILE` set); first host reading 06:20:31 UTC, 459 W |
 | `termostat-power.timer` | Deployed 2026-11-06 (commit `120cd01`), first run 07:43:00 CET (06:43 UTC). Every minute; took over power logging from `termostat-log` |
-| Controller (phase 3) | `termostat-control` written 2026-11-06, **shadow mode, not yet deployed**: every 5 minutes, writes nothing, stores decisions in `control_runs` |
+| Controller (phase 3) | `termostat-control` deployed 2026-11-06 (commit `3c8f82a`), **shadow mode**: every 5 minutes, writes nothing, stores decisions in `control_runs` |
 
 ### Verified against the real APIs (review of 2026-10-28)
 
@@ -35,6 +35,13 @@ Database downloaded from the host (1384 readings, 2026-10-23 21:00 – 2026-10-2
 
 - Whether the UTC `OnCalendar` spec avoids the gap at the next DST change. The gap seen in 2026 was at the end of DST, so the real test is 2027-10-31 (the start of DST is 2027-03-28). Both specs were accepted by systemd on the host and scheduled as expected: the logger at 5-minute marks, the backfill at 18:20 UTC plus a random delay (next run 19:20:52 CET).
 - Whether the timer gap at the DST change really was the timer (see above).
+
+## Next review (around 2026-11-09)
+
+1. Step tests: `termostat-steptest status`. Did the repeat heat and cool tests run, or why were nights skipped? Compare the drift-corrected gains with the first round, and check the power during the heat test: was the pump at its capacity at setpoint 22?
+2. Power (checklist step 7): mean power from the energy counter against setpoint, indoor and outdoor temperature. Are the dips to ~83 W defrosts (regular, foggy/near 0 °C) or idling (follow room temperature)? Daily kWh against outdoor temperature.
+3. Shadow controller: `termostat-control status --days 3`. Changes per day, time at each setpoint, controlled against measured room, inactive periods. Does its behaviour around step tests and manual changes look right?
+4. Decide whether ~26 setpoint changes a day is acceptable before the controller writes, and the open comfort questions (acceptable deviation, cooler nights).
 
 ## Deploy to the host
 
