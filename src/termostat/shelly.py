@@ -3,15 +3,17 @@
 The Plug PM Gen3 is metering only: it has no relay, so there is nothing to switch.
 
 API: https://shelly-api-docs.shelly.cloud/gen2/ComponentsAndServices/PM1
-GET http://<host>/rpc/PM1.GetStatus?id=0 returns e.g.
-    {"id": 0, "voltage": 231.2, "current": 3.62, "apower": 812.4, "freq": 50.0,
-     "aenergy": {"total": 1234.567, "by_minute": [13540.2, 13511.0, 13498.7], "minute_ts": 1762000000},
-     "ret_aenergy": {"total": 0.0, "by_minute": [0.0, 0.0, 0.0], "minute_ts": 1762000000}}
-Not yet verified against the real device (ordered 2026-11-01).
+GET http://<host>/rpc/PM1.GetStatus?id=0 returns (real device, S3PL-30116EU, firmware 2.1.1):
+    {"id": 0, "voltage": 231.1, "current": 0.374, "apower": 82.1, "freq": 49.9,
+     "aenergy": {"total": 20.411, "by_minute": [1275.698, 1488.314, 1488.314], "minute_ts": 1793945100},
+     "ret_aenergy": {"total": 0.0, "by_minute": [0.0, 0.0, 0.0], "minute_ts": 1793945100}}
+aenergy.total is in Wh, by_minute in mWh. The device can serve HTTPS with a user-installed
+certificate; SHELLY_CA_FILE then names the CA to trust.
 """
 
 import json
 import sqlite3
+import ssl
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlencode
@@ -32,16 +34,18 @@ class ShellyError(Exception):
 
 class ShellyClient:
     def __init__(self, config: ShellyConfig, timeout: float = TIMEOUT) -> None:
-        host = config.host.removeprefix("http://").rstrip("/")
+        scheme = "https" if config.host.startswith("https://") else "http"
+        host = config.host.removeprefix("http://").removeprefix("https://").rstrip("/")
         self.host = host
-        self._base_url = f"http://{host}/rpc"
+        self._base_url = f"{scheme}://{host}/rpc"
         self._auth = (USERNAME, config.password) if config.password else None
         self._timeout = timeout
+        self._context = ssl.create_default_context(cafile=config.ca_file) if config.ca_file else None
 
     def _rpc(self, method: str, **params: str | int) -> Any:
         url = f"{self._base_url}/{method}" + (f"?{urlencode(params)}" if params else "")
         try:
-            response = http.get(url, {"Accept": "application/json"}, self._timeout, self._auth)
+            response = http.get(url, {"Accept": "application/json"}, self._timeout, self._auth, self._context)
         except OSError as error:
             raise ShellyError(f"{method} failed: {error}") from None
         if response.status == 401:

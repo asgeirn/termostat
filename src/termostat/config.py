@@ -18,6 +18,7 @@ ENV_METNO_USER_AGENT = "METNO_USER_AGENT"
 ENV_DB = "TERMOSTAT_DB"
 ENV_SHELLY_HOST = "SHELLY_HOST"
 ENV_SHELLY_PASSWORD = "SHELLY_PASSWORD"
+ENV_SHELLY_CA_FILE = "SHELLY_CA_FILE"
 
 
 def _require(name: str) -> str:
@@ -52,6 +53,7 @@ class WeatherConfig:
 class ShellyConfig:
     host: str
     password: str | None
+    ca_file: Path | None = None
 
 
 def sensibo_api_key() -> str:
@@ -87,7 +89,12 @@ def shelly_config() -> ShellyConfig | None:
     if not host:
         return None
     password = os.environ.get(ENV_SHELLY_PASSWORD, "").strip() or None
-    return ShellyConfig(host, password)
+    ca_file = None
+    if raw := os.environ.get(ENV_SHELLY_CA_FILE, "").strip():
+        ca_file = Path(raw).expanduser()
+        if not ca_file.is_file():
+            raise ConfigError(f"{ENV_SHELLY_CA_FILE} does not exist: {ca_file}")
+    return ShellyConfig(host, password, ca_file)
 
 
 def database_path() -> Path:

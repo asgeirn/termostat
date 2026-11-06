@@ -124,9 +124,14 @@ def suggestions(devices: list[dict[str, Any]]) -> list[str]:
         user_agent = "termostat/0.1 your-email@example.com"
     lines.append(f"{config.ENV_METNO_USER_AGENT}={shlex.quote(user_agent)}")
 
-    lines += ["", "# Optional: Shelly power meter on the heat pump's supply (local IP or host name)"]
+    lines += ["", "# Optional: Shelly power meter on the heat pump's supply (IP, host name or https:// URL)"]
     host = os.environ.get(config.ENV_SHELLY_HOST, "").strip()
     lines.append(f"{config.ENV_SHELLY_HOST}={shlex.quote(host)}" if host else f"# {config.ENV_SHELLY_HOST}=192.168.1.50")
+    lines.append("# Only for https: CA certificate (PEM) that signed the plug's certificate")
+    ca_file = os.environ.get(config.ENV_SHELLY_CA_FILE, "").strip()
+    lines.append(
+        f"{config.ENV_SHELLY_CA_FILE}={shlex.quote(ca_file)}" if ca_file else f"# {config.ENV_SHELLY_CA_FILE}="
+    )
     lines.append("# Only if the plug has a password set (user name is always admin)")
     password = os.environ.get(config.ENV_SHELLY_PASSWORD, "").strip()
     lines.append(

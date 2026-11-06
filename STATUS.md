@@ -1,10 +1,10 @@
 # Status
 
-_Last updated: 2026-11-01 (second review, 8.5 days of logging; step tests written). Next review: after both step tests have run, or after the first cold spell._
+_Last updated: 2026-11-06 (third review: both step tests done, Shelly plug installed). Next review: after a few days of power data, or after the first real cold spell._
 
 ## Where we are
 
-**Phase 1 (logger only) is running** on the NixOS host as a systemd user timer. **Phase 2 (step tests) is written** (`termostat-steptest`, not yet deployed). Once installed, it is the only part that writes to the heat pump, at night only.
+**Phase 1 (logger) is running** on the NixOS host. **Phase 2 (step tests) is done:** both tests ran (heat on 11-02, cool on 11-03) and the timer now skips every night (`runs_per_kind` reached). **Power metering is working from the Mac but not yet deployed on the host** (see "Deploy to the host").
 
 | Component | State |
 |---|---|
@@ -13,8 +13,8 @@ _Last updated: 2026-11-01 (second review, 8.5 days of logging; step tests writte
 | Deployment | Commit `71d8f3f` (2026-10-28 18:02:22 UTC) was first pushed late, so the first install attempt failed. After the push and a rerun of `systemd/install.sh`, the unit files were installed on the host at **2026-10-28 19:09:14 CET (18:09:14 UTC)** (file mtimes), and both timers were confirmed active at 19:09:47 CET |
 | Install-time backfill | Ran `termostat-backfill --days 1` (24 hours is the account's history limit) |
 | `termostat-report` | Available for reviewing history |
-| `termostat-steptest.timer` | Written 2026-11-01, **not yet deployed**. Every 5 minutes; decides just after midnight, steps the setpoint ±2, restores at 05:30 local time |
-| Power metering | Shelly Plug PM Gen3 ordered 2026-11-01. Metering only, no relay. Logging code written (`power_readings`), **untested until the plug is delivered**; off while `SHELLY_HOST` is unset |
+| `termostat-steptest.timer` | Deployed 2026-11-01 (logger gap 22:00–22:20 UTC is the install). Both tests completed; idle since |
+| Power metering | Shelly Plug PM Gen3 (S3PL-30116EU, firmware 2.1.1) installed 2026-11-06 ~05:57 UTC, HTTPS with a mkcert certificate, password set. Verified from the Mac (`termostat-configure`, `termostat-log` on a database copy). **The host still runs code from before `db21065`**: the downloaded database has no `power_readings` table |
 | Controller (phase 3) | Not started |
 
 ### Verified against the real APIs (review of 2026-10-28)
@@ -32,9 +32,69 @@ Database downloaded from the host (1384 readings, 2026-10-23 21:00 – 2026-10-2
 
 ### Still unverified
 
-- Which `reason` the controller's own API writes will get (probably `UserRequest`). Needed to tell the controller's writes from manual changes in the history. Test during the step test.
 - Whether the UTC `OnCalendar` spec avoids the gap at the next DST change. The gap seen in 2026 was at the end of DST, so the real test is 2027-10-31 (the start of DST is 2027-03-28). Both specs were accepted by systemd on the host and scheduled as expected: the logger at 5-minute marks, the backfill at 18:20 UTC plus a random delay (next run 19:20:52 CET).
 - Whether the timer gap at the DST change really was the timer (see above).
+
+## Deploy to the host
+
+The host needs commit `db21065` (Shelly logging) plus the HTTPS support from this review (not yet committed), and the CA certificate:
+
+```sh
+cd <repo on host> && git pull && systemd/install.sh
+cp rootCA.pem ~/.config/termostat/rootCA.pem      # from the Mac; only the CA, never the *-key.pem files
+echo 'SHELLY_CA_FILE=~/.config/termostat/rootCA.pem' >> ~/.config/termostat/env
+termostat-configure > /dev/null                   # should list the plug and its power
+termostat-log && sqlite3 $DB "SELECT * FROM power_readings ORDER BY id DESC LIMIT 1"
+```
+
+`SHELLY_HOST=https://192.168.10.191/` and `SHELLY_PASSWORD` are already set. Without `SHELLY_CA_FILE` the HTTPS call fails certificate verification on the host. (It works on the Mac without it only because Homebrew's CA bundle imports the mkcert root from the keychain.) `*.pem` is now in `.gitignore`.
+
+## Findings from the third review (2026-11-06)
+
+Database downloaded 2026-11-06 06:01 UTC.
+
+### Logging health
+
+- 288 readings every full day 11-02 to 11-05, no nulls. Gaps: 11-01 03:40 (10 min, missed run) and 11-01 22:00–22:20 (steptest install). 90 s backfill gap 11-01 22:03–22:16, same cause.
+- 39–42 forecasts a day. Database 10.4 MB.
+- Colder now: outdoor −0.5 to 9.0 °C since 11-01, down to around 0 °C at night.
+
+### Step tests
+
+| | Heat (night 11-02) | Cool (night 11-03) |
+|---|---|---|
+| Setpoint | 20 → 22, 00:01–05:31 local | 20 → 18, 00:01–05:31 local |
+| Outdoor (mean) | 5.5 °C, cloud 3 % | 1.3 °C, cloud 31 % |
+| Room start → end | 21.06 → 21.4 (max 21.5) | 21.1 → 19.39 (min 19.3) |
+| Fit (`steptest.analyze`) | Δ∞ +0.49, τ 1.8 h, gain 0.24, RMSE 0.055 | Δ∞ −1.82, τ 2.65 h, gain 0.91, RMSE 0.062 |
+| Pre-step slope | **−0.39 °C/h** | −0.04 °C/h |
+
+- **Both ran as designed.** No limit or override aborts, restore on time, everything recorded. **Our API writes get reason `UserAPI`** in the AC history, separate from the app's `UserRequest`. That answers the open question: the controller can tell its own writes from manual changes.
+- **The fitted gains are biased by the starting point.** Both tests started at 21.0–21.1, above the setpoint-20 overnight level (20.6 on 11-04 and 11-05 at similar outdoor temperatures), with the room still settling after the evening. The fit takes the pre-step level as the baseline, so the heat gain is too low and the cool gain too high. Using the overnight plateaus instead (02–05 UTC, fan medium_low):
+
+  | Setpoint | Overnight plateau | Outdoor | Source |
+  |---|---|---|---|
+  | 18 | 19.3–19.5 (fit T∞ 19.2) | 1 °C | cool test |
+  | 19 | 20.0–20.4 | 5–8 °C | 10-29 to 10-31 |
+  | 20 | 20.6 (20.8 at 6–7 °C) | 1–2 °C | 11-04, 11-05 |
+  | 22 | 21.4–21.5 (fit T∞ 21.5) | 5 °C | heat test |
+
+  The incremental gain falls as the setpoint rises: about 0.8 °C per setpoint degree from 18 to 19, 0.5 from 19 to 20, and 0.45 from 20 to 22. The 10-31 daytime step (gain 0.83) does not fit this well, but it had cooking and daylight in it. The plateau at 20 barely moves with outdoor temperature (20.6 at 1 °C, 20.8 at 6.5 °C), so the unit regulates on its own sensor and the Sky offset is fairly stable for now.
+- **Time constant 1.8–2.65 h, no dead time** (3.4 h on 10-31). Use about 2.5 h for the design.
+- **Cooling is faster than heating near the unit.** After the heat test was restored, the room fell from 21.5 to 20.65 in one hour, much faster than τ. When the unit stops blowing warm air, the Sky drops quickly. There is likely a fast component (air at the sensor) on top of the slow one (thermal mass). Power data will show whether the compressor stopped.
+- **Comfort cost of the cool test:** below 20.0 from about 02:00 to 08:00 local on 11-03. The room had recovered to 20.0 about 2.5 h after the 05:31 restore (recovery is slower than the drop).
+
+### What this means for the controller (phase 3)
+
+- Setpoint resolution limits precision. Integer °C only (Fahrenheit is not native on this unit and maps one-to-one to the °C values). At night, setpoint 19 gives about 20.0–20.1 (too close to the minimum; the household raised it twice from 19.7–19.9), and 20 gives about 20.6. To hold about 20.2–20.3, the controller will have to **time-proportion between two adjacent setpoints** (e.g. 19 and 20, with a period well under τ, say 30–60 min), with the duty cycle set by an integral term on the Sky temperature.
+- The nonlinear gain (smaller at higher setpoints) and the fast drop when the unit idles mean a plain linear PI with a fixed gain will be detuned somewhere. Schedule the gain on setpoint, or keep the setpoint within a narrow band (19–21) where it is roughly linear.
+
+### Power (first observations, 2026-11-06)
+
+- **The pump was off in Sensibo from 05:49 to about 06:09 UTC** (forgotten after plugging in through the Shelly, the 05:22/05:30/05:49 `UserRequest` off/on events), so the 05:50–06:05 readings are with the pump off.
+- **Off draw is about 83 W**, steady. This is probably the outdoor unit's crankcase heater (outdoor about −0.5 °C), which is roughly 2 kWh a day whenever the pump is off in the cold.
+- **Start-up:** after it was switched on, the power ramped 84 → 174 → 352 → 603 → 680 W over about a minute, then eased to about 350 W within the next two minutes.
+- **`aenergy.by_minute[0]` is the last complete minute**, i.e. the energy in `[minute_ts − 60, minute_ts)` in mWh. `minute_ts` is the start of the current, partial minute. Checked against `aenergy.total`: 1.489 Wh between 06:08:07 and 06:09:05 against `by_minute[0]` = 1488.3 mWh. The counter moves in steps of 0.2126 Wh, so `by_minute` values are multiples of that (1275.7 = 6 steps, 1488.3 = 7 steps), giving about ±13 W resolution per minute. Over 5 minutes, `aenergy_total` differences are better than ±1 W at typical heating power.
 
 ## Findings from the second review (2026-11-01)
 
@@ -102,7 +162,7 @@ Only the stretch 10-23 21:00 to 10-25 07:52 (about 35 hours, setpoint 18, fan lo
 
 ## When the Shelly plug arrives
 
-Testing is deferred until delivery. The response format is taken from the Shelly Gen2+ API documentation and has not been verified.
+Steps 2–6 done 2026-11-06 from the Mac (see the third review); step 3 additionally needs `SHELLY_CA_FILE` (HTTPS). Step 1 checked: the plug is rated 3.6 kW, the heat pump draws at most 2.4 kW. Remaining: deploy to the host, then step 7.
 
 1. Check the plug's rated current against the heat pump's rating plate (maximum and start-up current) before plugging the heat pump in.
 2. Shelly app or web UI: connect it to Wi-Fi, update the firmware, give it a DHCP reservation. Optionally set a password.
@@ -198,7 +258,7 @@ SELECT changed_at, reason, changed_properties, ac_on, mode, target_temperature, 
 FROM ac_state_changes ORDER BY changed_at DESC LIMIT 10;
 ```
 
-Check that no `ScheduledCommand` or `Tibber` rows appear after 2026-10-23 (they would conflict with the controller).
+Check that no `ScheduledCommand` or `Tibber` rows appear after 2026-10-23 (they would conflict with the controller). `UserAPI` rows are termostat's own writes (step tests, later the controller).
 
 ### 7. Backfill
 
@@ -247,6 +307,7 @@ Taken from `ac_state_changes`, all `UserRequest` (so app changes; the remote is 
 | 10-28 20:05 | setpoint 20 → 19 | (Not commented.) |
 | 10-31 08:03 | off/on, setpoint 19 → 20 → 21 | Temperature too low (Sky read 19.7 °C). |
 | 10-31 14:32 | setpoint 21 → 20 | (Not commented. Too warm?) |
+| 11-06 05:22–05:49 | off, on, off | Shelly plug installed (plugged in twice); pump left off until about 06:09 |
 
 ### Other events (window open, wood stove, guests, away, ...)
 
@@ -294,4 +355,6 @@ Taken from `ac_state_changes`, all `UserRequest` (so app changes; the remote is 
 | 2026-11-01 | Comfort minimum 20.0 °C, target as close above it as possible |
 | 2026-11-01 | Shelly Plug PM Gen3 ordered for power metering; metering only (no relay); logging into `power_readings` written, testing deferred until delivery |
 | 2026-11-01 | Step tests now rather than waiting for cold: autonomous `termostat-steptest`, heat +2 then cool −2, 00:00–05:30 local, gated on forecast and room stability, everything recorded in the database |
+| 2026-11-06 | Third review: both step tests completed; τ ≈ 2–2.7 h, no dead time; gain falls with setpoint (≈ 0.8 → 0.45 per degree); own writes show as `UserAPI` |
+| 2026-11-06 | Shelly plug installed, served over HTTPS with a mkcert certificate; `SHELLY_HOST` accepts `https://` URLs and `SHELLY_CA_FILE` names the CA to trust |
 | | |

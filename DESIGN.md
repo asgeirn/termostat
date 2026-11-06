@@ -24,7 +24,7 @@ The heat pump is the main source of heating in the house.
 | Weather forecast | The house reacts slowly, so heating can start *before* a cold snap | met.no Locationforecast |
 | Solar radiation / cloud cover | Solar gain can noticeably heat a well insulated house | met.no, or time of day as a proxy |
 | Wind | Increases infiltration losses | met.no |
-| Heat pump power draw | Shows actual heat delivered, reveals defrost cycles and saturation | **Shelly Plug PM Gen3, ordered 2026-11-01** (see Power metering) |
+| Heat pump power draw | Shows actual heat delivered, reveals defrost cycles and saturation | **Shelly Plug PM Gen3, installed 2026-11-06** (see Power metering) |
 | Other heat sources | Wood stove, cooking, guests etc. will otherwise confuse the controller | Manual flag, or detected from sudden rises |
 | Electricity spot price | Optional: shift heating to cheap hours | Nord Pool / hvakosterstrommen.no |
 | Thermal model of the house | Gain, time constant and dead time are needed to tune the controller | Step test (see Phases) |
@@ -63,6 +63,7 @@ All configuration is through environment variables. `termostat-configure` lists 
 - `TERMOSTAT_DB` (optional): SQLite database path.
 - `SHELLY_HOST` (optional): IP address or host name of the Shelly power meter on the heat pump's supply. Power logging is off when unset.
 - `SHELLY_PASSWORD` (optional): the plug's password, if one is set (digest authentication, user `admin`).
+- `SHELLY_CA_FILE` (optional): CA certificate to trust when `SHELLY_HOST` is an `https://` URL with a privately issued certificate.
 
 ### Control strategy: cascade PI
 
@@ -129,7 +130,7 @@ If the forecast cannot be fetched, the logger and controller continue using the 
 
 ### Power metering
 
-A Shelly Plug PM Gen3 was ordered on 2026-11-01. It is a metering-only plug with no relay, so it cannot cut power. The heat pump will be plugged in through it, so it measures the whole unit (compressor, fans, controls and defrost). It answers the questions the temperature data alone cannot (see STATUS.md):
+A Shelly Plug PM Gen3 (S3PL-30116EU) was ordered on 2026-11-01 and installed on 2026-11-06. It is a metering-only plug with no relay, so it cannot cut power. The heat pump will be plugged in through it, so it measures the whole unit (compressor, fans, controls and defrost). It answers the questions the temperature data alone cannot (see STATUS.md):
 
 - Whether the compressor is running, idling or cycling, which settles the "floor" question and shows when the pump is at its capacity limit.
 - Defrost cycles in cold weather, which are disturbances the controller should not react to (and a reason to freeze the integrator).
@@ -138,7 +139,7 @@ A Shelly Plug PM Gen3 was ordered on 2026-11-01. It is a metering-only plug with
 
 How it is read:
 
-- Local Gen2+ RPC API over HTTP on the LAN, no cloud: `GET http://<host>/rpc/PM1.GetStatus?id=0` gives instantaneous power (`apower`, W), voltage, current, frequency, the energy counter (`aenergy.total`, Wh) and energy per minute for the last three minutes (`aenergy.by_minute`, mWh).
+- Local Gen2+ RPC API on the LAN, no cloud (HTTPS with a mkcert certificate installed on the plug, so the password is not sent in the clear): `GET http://<host>/rpc/PM1.GetStatus?id=0` gives instantaneous power (`apower`, W), voltage, current, frequency, the energy counter (`aenergy.total`, Wh) and energy per minute for the last three minutes (`aenergy.by_minute`, mWh).
 - `termostat-log` reads it on every run and stores one row in `power_readings`, including the raw response. The difference in `aenergy.total` between two runs gives the exact mean power over the 5 minutes, so short compressor cycles between samples are not lost. `by_minute` adds 1-minute resolution for 3 of every 5 minutes. If cycling turns out to be faster than that, add a separate 1-minute power timer.
 - A failed power reading is logged as a warning and counts as a failed step, like the other sources, but never stops the rest of the run.
 

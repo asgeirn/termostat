@@ -51,8 +51,9 @@ journalctl --user -u termostat-log -n 50              # logs and errors
 | `TERMOSTAT_ALTITUDE` | no | Altitude in metres above sea level; improves forecast temperature |
 | `METNO_USER_AGENT` | yes | Identifies the app to MET Norway, e.g. `termostat/0.1 you@example.com` ([terms of service](https://api.met.no/doc/TermsOfService)) |
 | `TERMOSTAT_DB` | no | SQLite database path, default `~/.local/share/termostat/termostat.db` |
-| `SHELLY_HOST` | no | IP address or host name of the Shelly power meter (Plug PM Gen3) on the heat pump's supply; power logging is off when unset |
+| `SHELLY_HOST` | no | IP address or host name of the Shelly power meter (Plug PM Gen3) on the heat pump's supply, or an `https://` URL; power logging is off when unset |
 | `SHELLY_PASSWORD` | no | The plug's password, if set (user name is always `admin`) |
+| `SHELLY_CA_FILE` | no | CA certificate (PEM) to trust for an `https://` `SHELLY_HOST` with a private certificate, e.g. `~/.config/termostat/rootCA.pem` |
 
 The file uses `KEY=value` lines, which work both as a systemd `EnvironmentFile` and in a shell (`set -a; . ~/.config/termostat/env; set +a`). Keep it private, since it contains the API key.
 

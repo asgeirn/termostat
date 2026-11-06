@@ -16,3 +16,6 @@ wheels/
 *.db
 *.db-shm
 *.db-wal
+
+# TLS certificates
+*.pem

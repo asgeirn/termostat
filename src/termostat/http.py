@@ -2,6 +2,7 @@
 
 import gzip
 import json
+import ssl
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -26,13 +27,15 @@ def get(
     headers: dict[str, str] | None = None,
     timeout: float = DEFAULT_TIMEOUT,
     digest_auth: tuple[str, str] | None = None,
+    context: ssl.SSLContext | None = None,
 ) -> Response:
     """GET a URL. Non-2xx responses (including 304) are returned, not raised.
 
-    Network failures raise OSError (urllib.error.URLError, TimeoutError). digest_auth is a
-    (username, password) pair for HTTP digest authentication.
+    Network failures raise OSError (urllib.error.URLError, TimeoutError, ssl.SSLError). digest_auth
+    is a (username, password) pair for HTTP digest authentication. context overrides the TLS
+    settings, e.g. to trust a private CA.
     """
-    return request("GET", url, headers, timeout=timeout, digest_auth=digest_auth)
+    return request("GET", url, headers, timeout=timeout, digest_auth=digest_auth, context=context)
 
 
 def request(
@@ -42,6 +45,7 @@ def request(
     body: Any = None,
     timeout: float = DEFAULT_TIMEOUT,
     digest_auth: tuple[str, str] | None = None,
+    context: ssl.SSLContext | None = None,
 ) -> Response:
     """Send a request, with body (if not None) encoded as JSON. Errors are handled as in get()."""
     headers = {"Accept-Encoding": "gzip", **(headers or {})}
@@ -50,11 +54,14 @@ def request(
         data = json.dumps(body).encode()
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
-    opener = urllib.request.build_opener()
+    handlers: list[urllib.request.BaseHandler] = []
+    if context is not None:
+        handlers.append(urllib.request.HTTPSHandler(context=context))
     if digest_auth is not None:
         passwords = urllib.request.HTTPPasswordMgrWithDefaultRealm()
         passwords.add_password(None, url, *digest_auth)
-        opener = urllib.request.build_opener(urllib.request.HTTPDigestAuthHandler(passwords))
+        handlers.append(urllib.request.HTTPDigestAuthHandler(passwords))
+    opener = urllib.request.build_opener(*handlers)
     try:
         with opener.open(request, timeout=timeout) as response:
             status, response_headers, body = response.status, response.headers, response.read()
