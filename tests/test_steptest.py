@@ -152,6 +152,17 @@ class DecisionTest(StepTestCase):
         self.run_at(DECIDE)
         self.assertTrue(any("indoor temperature varied" in r for r in json.loads(self.test()["reasons"])))
 
+    def test_skips_when_room_drifting(self) -> None:
+        # Cooling 0.3 °C/h: within the 1-hour range limit, but too fast to correct for reliably.
+        self.conn.execute("DELETE FROM readings")
+        self.add_readings(MIDNIGHT - timedelta(hours=2), DECIDE, lambda t: 21.1 + 0.3 * (MIDNIGHT - t).total_seconds() / 3600)
+        self.run_at(DECIDE)
+        reasons = json.loads(self.test()["reasons"])
+        self.assertEqual(len(reasons), 1)
+        self.assertIn("drifting -0.3", reasons[0])
+        self.assertAlmostEqual(json.loads(self.test()["checks"])["indoor"]["slope_per_hour"], -0.3, delta=0.03)
+        self.assertEqual(self.sensibo.writes, [])
+
     def test_skips_with_auto_fan(self) -> None:
         self.sensibo.ac["fanLevel"] = "auto"
         self.run_at(DECIDE)
@@ -159,7 +170,7 @@ class DecisionTest(StepTestCase):
         self.assertEqual(self.sensibo.writes, [])
 
     def test_kind_order_and_completion(self) -> None:
-        settings = steptest.Settings()
+        settings = steptest.Settings(runs_per_kind=1)
         self.assertEqual(steptest.choose_kind(self.conn, settings), "heat")
         self.conn.execute(
             "INSERT INTO step_tests (night, device_id, decided_at, decision, kind, status) VALUES ('2026-10-01', 'dev', 'x', 'run', 'heat', 'completed')"
@@ -202,6 +213,8 @@ class RunTest(StepTestCase):
         self.assertEqual(result["pre_step_level"], 20.8)
         self.assertAlmostEqual(result["fit"]["tau_hours"], 3.0, delta=0.6)
         self.assertAlmostEqual(result["gain"], 0.8, delta=0.08)
+        self.assertEqual(result["pre_step_slope_per_hour"], 0.0)
+        self.assertEqual(result["fit_uncorrected"], result["fit"])
 
         # Nothing more happens, and the next night picks the cool test.
         self.run_at(RESTORE + timedelta(minutes=5))
@@ -283,6 +296,19 @@ class FitTest(unittest.TestCase):
         self.assertAlmostEqual(fit["delta_final"], 1.5, delta=0.02)
         self.assertAlmostEqual(fit["tau_hours"], 2.5, delta=0.05)
         self.assertAlmostEqual(fit["dead_time_minutes"], 12.0, delta=3.0)
+
+    def test_corrects_for_drift_before_step(self) -> None:
+        # Room drifting -0.15 °C/h towards a level 0.4 °C lower (τ 2.5 h), plus a -1.5 °C step.
+        def y(t: float) -> float:
+            return -0.15 * 2.5 * (1 - math.exp(-t / 2.5)) - 1.5 * (1 - math.exp(-t / 2.5))
+
+        points = [(i * 0.025, y(i * 0.025)) for i in range(220)]
+        fit = steptest.fit_fopdt(points, initial_slope=-0.15)
+        assert fit is not None
+        self.assertAlmostEqual(fit["delta_final"], -1.5, delta=0.02)
+        uncorrected = steptest.fit_fopdt(points)
+        assert uncorrected is not None
+        self.assertAlmostEqual(uncorrected["delta_final"], -1.875, delta=0.03)
 
     def test_too_few_points(self) -> None:
         self.assertIsNone(steptest.fit_fopdt([(0.1, 0.0)]))

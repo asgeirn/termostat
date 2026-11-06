@@ -38,8 +38,9 @@ class Settings:
     # When to decide and start (local time), and when to restore.
     start_window: timedelta = timedelta(minutes=30)
     end_time: time = time(5, 30)
-    # Completed tests wanted per kind. Tests aborted at a safety limit also count.
-    runs_per_kind: int = 1
+    # Completed tests wanted per kind. Tests aborted at a safety limit also count. Raised from 1
+    # on 2026-11-06 to repeat both tests with power metering and the drift-corrected analysis.
+    runs_per_kind: int = 2
     # Weather: the night must be stable.
     max_outdoor_spread: float = 3.0
     max_wind_speed: float = 8.0
@@ -48,6 +49,11 @@ class Settings:
     stable_window: timedelta = timedelta(minutes=60)
     min_stable_readings: int = 9
     max_indoor_range: float = 0.4
+    # The analysis corrects for the room's drift before the step (usually still cooling after the
+    # evening, 0.1–0.2 °C/h at midnight), so only refuse drift too large to correct reliably. Over
+    # 2 hours, since the slope over 1 hour is dominated by wiggles at the sensor's 0.1 °C resolution.
+    slope_window: timedelta = timedelta(hours=2)
+    max_indoor_slope: float = 0.2  # °C per hour
     manual_quiet_period: timedelta = timedelta(hours=3)
     max_measurement_age: timedelta = timedelta(minutes=10)
     # Never write a setpoint outside this range.
@@ -153,25 +159,33 @@ def check_device(
 
 
 def check_indoor(conn: sqlite3.Connection, now: datetime, settings: Settings, checks: dict[str, Any]) -> list[str]:
-    temperatures = [
-        row[0]
-        for row in conn.execute(
-            "SELECT temperature FROM readings WHERE logged_at >= ? AND logged_at <= ? AND temperature IS NOT NULL",
-            (iso(now - settings.stable_window), iso(now)),
+    window = max(settings.stable_window, settings.slope_window)
+    samples = [
+        (parse_iso(t), v)
+        for t, v in conn.execute(
+            """SELECT logged_at, temperature FROM readings
+               WHERE logged_at >= ? AND logged_at <= ? AND temperature IS NOT NULL ORDER BY logged_at""",
+            (iso(now - window), iso(now)),
         )
     ]
+    temperatures = [v for t, v in samples if t >= now - settings.stable_window]
+    slope = _slope_per_hour([(t, v) for t, v in samples if t >= now - settings.slope_window])
     checks["indoor"] = {
         "readings": len(temperatures),
         "min": min(temperatures, default=None),
         "max": max(temperatures, default=None),
         "mean": round(statistics.fmean(temperatures), 2) if temperatures else None,
+        "slope_per_hour": slope,
     }
     if len(temperatures) < settings.min_stable_readings:
         return [f"only {len(temperatures)} readings in the last {settings.stable_window}"]
+    reasons = []
     spread = max(temperatures) - min(temperatures)
     if spread > settings.max_indoor_range + 1e-9:
-        return [f"indoor temperature varied {spread:.1f} °C in the last {settings.stable_window}"]
-    return []
+        reasons.append(f"indoor temperature varied {spread:.1f} °C in the last {settings.stable_window}")
+    if slope is not None and abs(slope) > settings.max_indoor_slope + 1e-9:
+        reasons.append(f"indoor temperature is drifting {slope:+.2f} °C/h over the last {settings.slope_window}")
+    return reasons
 
 
 def check_manual_changes(conn: sqlite3.Connection, now: datetime, settings: Settings, checks: dict[str, Any]) -> list[str]:
@@ -440,11 +454,13 @@ def run(conn: sqlite3.Connection, sensibo: Sensibo, device_id: str, now: datetim
 # --- Analysis ---------------------------------------------------------------
 
 
-def fit_fopdt(points: list[tuple[float, float]]) -> dict[str, float] | None:
-    """Fit dy(t) = K∞ (1 - exp(-(t - θ)/τ)) for t > θ, else 0, by least squares.
+def fit_fopdt(points: list[tuple[float, float]], initial_slope: float = 0.0) -> dict[str, float] | None:
+    """Fit dy(t) = s τ (1 - exp(-t/τ)) + K∞ (1 - exp(-(t - θ)/τ)) (step part 0 for t <= θ) by least squares.
 
-    points are (hours since the step, change from the pre-step level). Grid search over θ and τ;
-    K∞ has a closed form for each pair.
+    points are (hours since the step, change from the pre-step level). s is the room's slope before
+    the step in °C/h: a first order system drifting at that rate settles s τ further on, with the
+    same time constant, whether or not the step is made. Grid search over θ and τ; K∞ has a closed
+    form for each pair.
     """
     if len(points) < 5:
         return None
@@ -457,8 +473,9 @@ def fit_fopdt(points: list[tuple[float, float]]) -> dict[str, float] | None:
             ff = sum(x * x for x in f)
             if ff == 0:
                 continue
-            k = sum(x * y for x, (_, y) in zip(f, points)) / ff
-            sse = sum((y - k * x) ** 2 for x, (_, y) in zip(f, points))
+            y = [v - initial_slope * tau * (1 - math.exp(-t / tau)) for t, v in points]
+            k = sum(x * v for x, v in zip(f, y)) / ff
+            sse = sum((v - k * x) ** 2 for x, v in zip(f, y))
             if best is None or sse < best[0]:
                 best = (sse, k, tau, theta)
     if best is None:
@@ -508,14 +525,18 @@ def _slope_per_hour(samples: list[tuple[datetime, float]]) -> float | None:
     return round(sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx, 3) if sxx else None
 
 
-def analyze(conn: sqlite3.Connection, test_id: int, now: datetime) -> dict[str, Any] | None:
-    """Fit a first order plus dead time model to a test's response and store it."""
+def analyze(conn: sqlite3.Connection, test_id: int, now: datetime, settings: Settings = Settings()) -> dict[str, Any] | None:
+    """Fit a first order plus dead time model to a test's response and store it.
+
+    The main fit corrects for the room's drift over settings.slope_window before the step;
+    fit_uncorrected assumes the room would have stayed at its pre-step level.
+    """
     test = test_row(conn, test_id)
     if test is None or test["started_at"] is None:
         return None
     started = parse_iso(test["started_at"])
     ended = parse_iso(test["ended_at"] or test["restored_at"] or iso(now))
-    source, samples = _samples(conn, test["device_id"], started - timedelta(hours=1), ended)
+    source, samples = _samples(conn, test["device_id"], started - settings.slope_window, ended)
     pre = [(t, v) for t, v in samples if t < started]
     post = [(t, v) for t, v in samples if started <= t <= ended]
     recent_pre = [v for t, v in pre if t >= started - timedelta(minutes=30)]
@@ -531,13 +552,17 @@ def analyze(conn: sqlite3.Connection, test_id: int, now: datetime) -> dict[str, 
             (iso(started), iso(ended)),
         )
     ]
-    fit = fit_fopdt([((t - started).total_seconds() / 3600, v - level) for t, v in post])
+    points = [((t - started).total_seconds() / 3600, v - level) for t, v in post]
+    slope = _slope_per_hour(pre)
+    fit = fit_fopdt(points, slope or 0.0)
+    uncorrected = fit_fopdt(points)
     result = {
         "source": source,
         "samples": len(post),
         "duration_hours": round((ended - started).total_seconds() / 3600, 2),
         "pre_step_level": round(level, 2),
-        "pre_step_slope_per_hour": _slope_per_hour(pre),
+        "pre_step_slope_per_hour": slope,
+        "pre_step_slope_window_hours": settings.slope_window.total_seconds() / 3600,
         "delta_setpoint": delta_setpoint,
         "end_temperature": post[-1][1],
         "min_temperature": min(v for _, v in post),
@@ -546,6 +571,10 @@ def analyze(conn: sqlite3.Connection, test_id: int, now: datetime) -> dict[str, 
         "fan_level": test["baseline_fan_level"],
         "fit": fit,
         "gain": round(fit["delta_final"] / delta_setpoint, 3) if fit and delta_setpoint else None,
+        "fit_uncorrected": uncorrected,
+        "gain_uncorrected": (
+            round(uncorrected["delta_final"] / delta_setpoint, 3) if uncorrected and delta_setpoint else None
+        ),
     }
     with conn:
         conn.execute(
@@ -578,7 +607,8 @@ def _format_checks(decision: dict[str, Any]) -> Iterator[str]:
                f"on={ac['on']} mode={ac['mode']} fan={ac['fanLevel']} setpoint={ac['targetTemperature']}"
                + (f" -> {checks['step_target_temperature']}" if "step_target_temperature" in checks else ""))
     indoor = checks["indoor"]
-    yield f"  Indoor:   {indoor['readings']} readings in the last hour, {indoor['min']} – {indoor['max']} °C"
+    yield (f"  Indoor:   {indoor['readings']} readings in the last hour, {indoor['min']} – {indoor['max']} °C, "
+           f"slope {indoor.get('slope_per_hour')} °C/h over the last {checks['settings']['slope_window']}")
     yield f"  Manual:   last AC state change {checks['last_ac_state_change']}"
     if forecast := checks.get("forecast"):
         yield (f"  Forecast: {forecast['outdoor_min']} – {forecast['outdoor_max']} °C, wind max {forecast['wind_max']} m/s, "
@@ -609,6 +639,10 @@ def print_status(conn: sqlite3.Connection) -> None:
                     line += (f"\n            Δ∞ {fit['delta_final']:+.2f} °C (gain {result['gain']}), "
                              f"τ {fit['tau_hours']} h, dead time {fit['dead_time_minutes']} min, "
                              f"RMSE {fit['rmse']}, outdoor {result['outdoor_mean']} °C, {result['source']}")
+                    if "fit_uncorrected" in result:
+                        line += (f"\n            pre-step slope {result['pre_step_slope_per_hour']} °C/h; without drift "
+                                 f"correction Δ∞ {result['fit_uncorrected']['delta_final']:+.2f} °C "
+                                 f"(gain {result['gain_uncorrected']})")
         print(line)
 
 

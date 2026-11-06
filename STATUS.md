@@ -4,7 +4,7 @@ _Last updated: 2026-11-06 (third review: both step tests done, Shelly plug insta
 
 ## Where we are
 
-**Phase 1 (logger) is running** on the NixOS host. **Phase 2 (step tests) is done:** both tests ran (heat on 11-02, cool on 11-03) and the timer now skips every night (`runs_per_kind` reached). **Power metering is deployed** and logging on the host since 2026-11-06 06:20 UTC, every 5 minutes. A separate 1-minute `termostat-power` timer is written but **not yet deployed** (rerun `systemd/install.sh` after pulling).
+**Phase 1 (logger) is running** on the NixOS host. **Phase 2 (step tests) is being repeated:** both tests ran once (heat on 11-02, cool on 11-03); `runs_per_kind` raised to 2 on 2026-11-06, so a second heat test and then a second cool test run on the next suitable nights, now with 1-minute power data and the drift-corrected analysis. **Power metering is deployed** and logging on the host since 2026-11-06 06:20 UTC: every 5 minutes from `termostat-log` until 06:43 UTC, every minute from `termostat-power` since.
 
 | Component | State |
 |---|---|
@@ -15,7 +15,7 @@ _Last updated: 2026-11-06 (third review: both step tests done, Shelly plug insta
 | `termostat-report` | Available for reviewing history |
 | `termostat-steptest.timer` | Deployed 2026-11-01 (logger gap 22:00–22:20 UTC is the install). Both tests completed; idle since |
 | Power metering | Shelly Plug PM Gen3 (S3PL-30116EU, firmware 2.1.1) installed 2026-11-06 ~05:57 UTC, HTTPS with a mkcert certificate, password set. Deployed on the host 2026-11-06 (commit `80d00e3`, `SHELLY_CA_FILE` set); first host reading 06:20:31 UTC, 459 W |
-| `termostat-power.timer` | Written 2026-11-06, **not yet deployed**. Every minute; takes over power logging from `termostat-log` |
+| `termostat-power.timer` | Deployed 2026-11-06 (commit `120cd01`), first run 07:43:00 CET (06:43 UTC). Every minute; took over power logging from `termostat-log` |
 | Controller (phase 3) | Not started |
 
 ### Verified against the real APIs (review of 2026-10-28)
@@ -67,11 +67,12 @@ Database downloaded 2026-11-06 06:01 UTC.
 | Setpoint | 20 → 22, 00:01–05:31 local | 20 → 18, 00:01–05:31 local |
 | Outdoor (mean) | 5.5 °C, cloud 3 % | 1.3 °C, cloud 31 % |
 | Room start → end | 21.06 → 21.4 (max 21.5) | 21.1 → 19.39 (min 19.3) |
-| Fit (`steptest.analyze`) | Δ∞ +0.49, τ 1.8 h, gain 0.24, RMSE 0.055 | Δ∞ −1.82, τ 2.65 h, gain 0.91, RMSE 0.062 |
-| Pre-step slope | **−0.39 °C/h** | −0.04 °C/h |
+| Fit as stored at the time | Δ∞ +0.49, τ 1.8 h, gain 0.24, RMSE 0.055 | Δ∞ −1.82, τ 2.65 h, gain 0.91, RMSE 0.062 |
+| Pre-step slope, 1 h / 2 h / 3 h | −0.39 / +0.07 / −0.02 °C/h | −0.04 / −0.14 / −0.15 °C/h |
+| Fit corrected for 2 h drift (refit 2026-11-06) | Δ∞ +0.36, gain 0.18 | Δ∞ −1.44, gain 0.72 |
 
 - **Both ran as designed.** No limit or override aborts, restore on time, everything recorded. **Our API writes get reason `UserAPI`** in the AC history, separate from the app's `UserRequest`. That answers the open question: the controller can tell its own writes from manual changes.
-- **The fitted gains are biased by the starting point.** Both tests started at 21.0–21.1, above the setpoint-20 overnight level (20.6 on 11-04 and 11-05 at similar outdoor temperatures), with the room still settling after the evening. The fit takes the pre-step level as the baseline, so the heat gain is too low and the cool gain too high. Using the overnight plateaus instead (02–05 UTC, fan medium_low):
+- **The cool test's gain is biased by drift; the heat test's is not** (corrected 2026-11-06; this review first said both were). The heat test's −0.39 °C/h covers only the last hour and is a wiggle at the sensor's 0.1 °C resolution. Over 2–3 hours the room was flat at about 21.05, near the setpoint-20 level for that outdoor temperature (20.8 on 10-28 and 11-01 at 6.5–7 °C). The cool test started while the room was still cooling after the evening at −0.14 °C/h (21.4 at 19:00 to 21.0 at 23:00 UTC), so the uncorrected fit credited about 0.4 °C of that to the step. With the 2-hour drift correction now in `steptest.analyze`, the gains are **0.18 (heat, 20 → 22) and 0.72 (cool, 20 → 18)**. The asymmetry is real: more setpoint gives little extra heat above 20, less setpoint cools the room a lot. A power reading from a repeat heat test would show whether the pump is at its capacity at setpoint 22 with fan medium_low. The overnight plateaus (02–05 UTC, fan medium_low) agree:
 
   | Setpoint | Overnight plateau | Outdoor | Source |
   |---|---|---|---|
@@ -80,7 +81,7 @@ Database downloaded 2026-11-06 06:01 UTC.
   | 20 | 20.6 (20.8 at 6–7 °C) | 1–2 °C | 11-04, 11-05 |
   | 22 | 21.4–21.5 (fit T∞ 21.5) | 5 °C | heat test |
 
-  The incremental gain falls as the setpoint rises: about 0.8 °C per setpoint degree from 18 to 19, 0.5 from 19 to 20, and 0.45 from 20 to 22. The 10-31 daytime step (gain 0.83) does not fit this well, but it had cooking and daylight in it. The plateau at 20 barely moves with outdoor temperature (20.6 at 1 °C, 20.8 at 6.5 °C), so the unit regulates on its own sensor and the Sky offset is fairly stable for now.
+  The incremental gain falls as the setpoint rises: about 0.8 °C per setpoint degree from 18 to 19, 0.5 from 19 to 20, and 0.35 from 20 to 22 (comparing plateaus at similar outdoor temperatures; 0.18 from the corrected heat fit). The 10-31 daytime step (gain 0.83) does not fit this well, but it had cooking and daylight in it. The plateau at 20 barely moves with outdoor temperature (20.6 at 1 °C, 20.8 at 6.5 °C), so the unit regulates on its own sensor and the Sky offset is fairly stable for now.
 - **Time constant 1.8–2.65 h, no dead time** (3.4 h on 10-31). Use about 2.5 h for the design.
 - **Cooling is faster than heating near the unit.** After the heat test was restored, the room fell from 21.5 to 20.65 in one hour, much faster than τ. When the unit stops blowing warm air, the Sky drops quickly. There is likely a fast component (air at the sensor) on top of the slow one (thermal mass). Power data will show whether the compressor stopped.
 - **Comfort cost of the cool test:** below 20.0 from about 02:00 to 08:00 local on 11-03. The room had recovered to 20.0 about 2.5 h after the 05:31 restore (recovery is slower than the drop).
@@ -359,6 +360,8 @@ Taken from `ac_state_changes`, all `UserRequest` (so app changes; the remote is 
 | 2026-11-01 | Step tests now rather than waiting for cold: autonomous `termostat-steptest`, heat +2 then cool −2, 00:00–05:30 local, gated on forecast and room stability, everything recorded in the database |
 | 2026-11-06 | Third review: both step tests completed; τ ≈ 2–2.7 h, no dead time; gain falls with setpoint (≈ 0.8 → 0.45 per degree); own writes show as `UserAPI` |
 | 2026-11-06 | Power logging deployed on the host (`80d00e3`); first `power_readings` row 06:20:31 UTC |
+| 2026-11-06 | Repeat both step tests (`runs_per_kind` 2), with power metering. Cool test keeps the 05:30 restore: below 20.0 overnight is acceptable as long as the room is back around 08:00 |
+| 2026-11-06 | Step test: refuse nights drifting more than 0.2 °C/h over 2 hours; fit corrects for the 2-hour pre-step drift (uncorrected fit kept). Refit gains: heat 0.18, cool 0.72 |
 | 2026-11-06 | Power logging moved to its own 1-minute timer (`termostat-power`), to resolve compressor stops and defrosts |
 | 2026-11-06 | Shelly plug installed, served over HTTPS with a mkcert certificate; `SHELLY_HOST` accepts `https://` URLs and `SHELLY_CA_FILE` names the CA to trust |
 | | |
